@@ -1,32 +1,39 @@
+use crate::bytes::{Bytes, WithBytes};
 use crate::u160::U160;
 use crate::u256::U256;
 use core::{fmt, str};
 use secp256k1::rand::rngs::OsRng;
 use secp256k1::{
-    Error, Message, PublicKey, Secp256k1, SecretKey, Signature, Signing, Verification,
+    All, Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, Signing,
+    Verification, VerifyOnly,
 };
+use std::sync::Arc;
+
+lazy_static! {
+    //签名用
+    static ref sctx: Arc<Secp256k1<SignOnly>> = Arc::new(Secp256k1::signing_only());
+    //验证用
+    static ref vctx: Arc<Secp256k1<VerifyOnly>> = Arc::new(Secp256k1::verification_only());
+    //创建用
+    static ref actx: Arc<Secp256k1<All>> = Arc::new(Secp256k1::new());
+}
+
+///这个库包含签名相关类型
 
 //验证
-fn verify<C: Verification>(
-    secp: &Secp256k1<C>,
-    msg: &[u8],
-    sig: &SigValue,
-    pubkey: &PublicKey,
-) -> Result<bool, Error> {
+fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
+    let ctx = vctx.clone();
     let uv = U256::new(msg);
-    let msg = Message::from_slice(uv.bytes())?;
-    Ok(secp.verify(&msg, &sig.inner, &pubkey).is_ok())
+    let msg = Message::from_slice(uv.to_bytes())?;
+    Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
 }
 
 //签名
-fn sign<C: Signing>(
-    secp: &Secp256k1<C>,
-    msg: &[u8],
-    seckey: &SecretKey,
-) -> Result<Signature, Error> {
+fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
+    let ctx = sctx.clone();
     let uv = U256::new(msg);
-    let msg = Message::from_slice(uv.bytes())?;
-    Ok(secp.sign(&msg, seckey))
+    let msg = Message::from_slice(uv.to_bytes())?;
+    Ok(ctx.sign(&msg, seckey))
 }
 
 ///签名结果
@@ -60,6 +67,20 @@ impl fmt::LowerHex for SigValue {
     }
 }
 
+impl WithBytes<SigValue> for SigValue {
+    fn with_bytes(bb: &Vec<u8>) -> SigValue {
+        let inner = Signature::from_der(&bb).unwrap();
+        SigValue { inner: inner }
+    }
+}
+
+impl Bytes for SigValue {
+    fn bytes(&self) -> Vec<u8> {
+        let sig = self.inner.serialize_der();
+        sig.as_ref().to_vec()
+    }
+}
+
 pub struct PubKey {
     inner: PublicKey,
 }
@@ -71,6 +92,20 @@ impl str::FromStr for PubKey {
             Ok(inner) => Ok(PubKey { inner: inner }),
             _ => Err(Error::InvalidSecretKey),
         }
+    }
+}
+
+impl WithBytes<PubKey> for PubKey {
+    fn with_bytes(bb: &Vec<u8>) -> PubKey {
+        let inner = PublicKey::from_slice(&bb).unwrap();
+        PubKey { inner: inner }
+    }
+}
+
+impl Bytes for PubKey {
+    fn bytes(&self) -> Vec<u8> {
+        let sig = self.inner.serialize();
+        sig.to_vec()
     }
 }
 
@@ -89,8 +124,7 @@ impl fmt::LowerHex for PubKey {
 impl PubKey {
     ///验证签名数据
     pub fn verify(&self, msg: &[u8], sig: &SigValue) -> Result<bool, Error> {
-        let secp = Secp256k1::new();
-        verify(&secp, msg, sig, &self.inner)
+        verify(msg, sig, &self.inner)
     }
 }
 
@@ -108,11 +142,29 @@ pub struct PriKey {
 impl PriKey {
     ///签名指定的数据
     pub fn sign(&self, msg: &[u8]) -> Result<SigValue, Error> {
-        let secp = Secp256k1::new();
-        match sign(&secp, msg, &self.inner) {
+        match sign(msg, &self.inner) {
             Ok(sig) => Ok(SigValue { inner: sig }),
             Err(err) => Err(err),
         }
+    }
+    //推导对应的公钥
+    pub fn pubkey(&self) -> PubKey {
+        let ctx = actx.clone();
+        let inner = PublicKey::from_secret_key(&ctx, &self.inner);
+        PubKey { inner: inner }
+    }
+}
+
+impl WithBytes<PriKey> for PriKey {
+    fn with_bytes(bb: &Vec<u8>) -> PriKey {
+        let inner = SecretKey::from_slice(&bb).unwrap();
+        PriKey { inner: inner }
+    }
+}
+
+impl Bytes for PriKey {
+    fn bytes(&self) -> Vec<u8> {
+        self.inner[..].to_vec()
     }
 }
 
@@ -138,39 +190,38 @@ impl fmt::Display for PriKey {
     }
 }
 
-///基于sepc256k1的签名方法
-pub struct KeyPair {
-    vpri: PriKey,
-    vpub: PubKey,
-}
-
-impl Default for KeyPair {
+impl Default for PriKey {
     fn default() -> Self {
-        let secp = Secp256k1::new();
         let mut rng = OsRng::new().unwrap();
-        let (seckey, pubkey) = secp.generate_keypair(&mut rng);
-        KeyPair {
-            vpri: PriKey { inner: seckey },
-            vpub: PubKey { inner: pubkey },
+        PriKey {
+            inner: SecretKey::new(&mut rng),
         }
     }
 }
 
-impl KeyPair {
-    pub fn get_pubkey(&self) -> &PubKey {
-        &self.vpub
-    }
-    pub fn get_prikey(&self) -> &PriKey {
-        &self.vpri
+impl PriKey {
+    pub fn new() -> Self {
+        PriKey::default()
     }
 }
 
 #[test]
+fn test_iobuf() {
+    use crate::iobuf::Writer;
+    let mut wb = Writer::default();
+    let pk = PriKey::new();
+    wb.put(&pk);
+    let mut rb = wb.reader();
+    let v2: PriKey = rb.get();
+}
+
+#[test]
 fn test_signer() {
-    let kp = KeyPair::default();
-    let kv = kp.get_prikey();
-    let pv = kp.get_pubkey();
+    let kv = PriKey::new();
+    let pv = kv.pubkey();
     let signature = kv.sign("adfs".as_bytes()).unwrap();
+    println!("{:x?}", signature.bytes());
+    println!("{}", signature);
     assert!(!pv.verify("adfs1".as_bytes(), &signature).unwrap());
     assert!(pv.verify("adfs".as_bytes(), &signature).unwrap());
 }

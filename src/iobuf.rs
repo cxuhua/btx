@@ -1,5 +1,4 @@
-use crate::u160::{SIZE as U160Size, U160};
-use crate::u256::{SIZE as U256Size, U256};
+use crate::bytes::{Bytes, WithBytes};
 use bytes::Buf;
 use bytes::BufMut;
 
@@ -42,27 +41,33 @@ impl<'a> Reader<'a> {
     pub fn bytes(&self) -> &[u8] {
         self.inner
     }
-    pub fn get_u256(&mut self) -> U256 {
-        let mut dst = [0u8; U256Size];
+    pub fn get<T>(&mut self) -> T
+    where
+        T: WithBytes<T>,
+    {
+        let l = self.get_u8();
+        let mut dst = [0u8].repeat(l as usize);
         self.inner.copy_to_slice(&mut dst);
-        U256::with_bytes(dst)
-    }
-    pub fn get_u160(&mut self) -> U160 {
-        let mut dst = [0u8; U160Size];
-        self.inner.copy_to_slice(&mut dst);
-        U160::with_bytes(dst)
+        T::with_bytes(&dst)
     }
 }
 
 impl Default for Writer {
     fn default() -> Self {
-        return Writer {
-            inner: Vec::with_capacity(32),
-        };
+        Writer::new(32)
     }
 }
 
 impl Writer {
+    pub fn put<T>(&mut self, v: &T)
+    where
+        T: Bytes,
+    {
+        let bb = v.bytes();
+        assert!(bb.len() <= 0xFF);
+        self.put_u8(bb.len() as u8);
+        self.inner.put(&bb[..])
+    }
     pub fn new(cap: usize) -> Self {
         Writer {
             inner: Vec::with_capacity(cap),
@@ -72,15 +77,6 @@ impl Writer {
         Reader {
             inner: &self.inner[..],
         }
-    }
-    pub fn put_u160(&mut self, v: &U160) {
-        self.inner.put(v.bytes());
-    }
-    pub fn put_u256(&mut self, v: &U256) {
-        self.inner.put(v.bytes());
-    }
-    pub fn put_writer(&mut self, w: &Writer) {
-        self.inner.put(w.reader().bytes());
     }
     pub fn put_u8(&mut self, v: u8) {
         self.inner.put_u8(v);
@@ -106,17 +102,6 @@ impl Writer {
     pub fn put_i64(&mut self, v: i64) {
         self.inner.put_i64_le(v);
     }
-}
-
-
-#[test]
-fn test_wirter_u256() {
-    let mut wb = Writer::default();
-    let v1 = U256::new("thisi".as_bytes());
-    wb.put_u256(&v1);
-    let mut rb = wb.reader();
-    let v2 = rb.get_u256();
-    assert_eq!(v1, v2);
 }
 
 #[test]

@@ -1,6 +1,7 @@
+use crate::bytes::{Bytes, WithBytes};
+use core::{fmt, str};
 use hex::ToHex;
 use sha2::{Digest, Sha256};
-use core::{fmt, str};
 
 pub const SIZE: usize = 32;
 
@@ -33,8 +34,22 @@ impl U256 {
     pub fn encode_hex(&self) -> String {
         self.inner.encode_hex()
     }
-    pub fn bytes(&self) -> &[u8] {
+    pub fn to_bytes(&self) -> &[u8] {
         &self.inner[..]
+    }
+}
+
+impl WithBytes<U256> for U256 {
+    fn with_bytes(bb: &Vec<u8>) -> U256 {
+        let mut inner = [0u8; SIZE];
+        inner.copy_from_slice(&bb);
+        U256 { inner: inner }
+    }
+}
+
+impl Bytes for U256 {
+    fn bytes(&self) -> Vec<u8> {
+        self.inner[..].to_vec()
     }
 }
 
@@ -69,7 +84,18 @@ fn test_sha256() {
         "c116f56090085e70de9ace850de814862f45021e3212cf8848145de4eb2262e1"
     );
     let y = U256::new("12121".as_bytes());
-    assert_ne!(x,y);
+    assert_ne!(x, y);
     let z = U256::new("21134".as_bytes());
-    assert_eq!(x,z);
+    assert_eq!(x, z);
+}
+
+#[test]
+fn test_wirter_u256() {
+    use crate::iobuf::Writer;
+    let mut wb = Writer::default();
+    let v1 = U256::new("thisi".as_bytes());
+    wb.put(&v1);
+    let mut rb = wb.reader();
+    let v2: U256 = rb.get();
+    assert_eq!(v1, v2);
 }
