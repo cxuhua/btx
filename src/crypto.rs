@@ -1,42 +1,34 @@
 use crate::bytes::{Bytes, WithBytes};
-use crate::u160::U160;
-use crate::u256::U256;
+use crate::hasher::Hasher;
 use core::{fmt, str};
 use secp256k1::rand::rngs::OsRng;
 use secp256k1::{
-    All, Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, Signing,
-    Verification, VerifyOnly,
+    All, Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, VerifyOnly,
 };
 use std::sync::Arc;
-
-lazy_static! {
-    //签名用
-    static ref sctx: Arc<Secp256k1<SignOnly>> = Arc::new(Secp256k1::signing_only());
-    //验证用
-    static ref vctx: Arc<Secp256k1<VerifyOnly>> = Arc::new(Secp256k1::verification_only());
-    //创建用
-    static ref actx: Arc<Secp256k1<All>> = Arc::new(Secp256k1::new());
-}
-
-///这个库包含签名相关类型
+///公钥前缀
+pub static PK_HRP: &str = "pk";
+///地址前缀
+pub static ADDR_HRP: &str = "btx";
 
 //验证
 fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
-    let ctx = vctx.clone();
-    let uv = U256::new(msg);
+    let ctx = Secp256k1::verification_only();
+    let uv = Hasher::new(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
 }
 
 //签名
 fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
-    let ctx = sctx.clone();
-    let uv = U256::new(msg);
+    let ctx = Secp256k1::signing_only();
+    let uv = Hasher::new(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.sign(&msg, seckey))
 }
 
 ///签名结果
+#[derive(Debug)]
 pub struct SigValue {
     inner: Signature,
 }
@@ -81,6 +73,7 @@ impl Bytes for SigValue {
     }
 }
 
+#[derive(Debug)]
 pub struct PubKey {
     inner: PublicKey,
 }
@@ -121,20 +114,46 @@ impl fmt::LowerHex for PubKey {
     }
 }
 
+use bech32::{FromBase32, ToBase32};
+
 impl PubKey {
     ///验证签名数据
     pub fn verify(&self, msg: &[u8], sig: &SigValue) -> Result<bool, Error> {
         verify(msg, sig, &self.inner)
     }
-}
-
-impl PubKey {
-    pub fn hash(&self) -> U160 {
-        let v = self.inner.serialize();
-        U160::new(&v[..])
+    /// 编码公钥
+    /// pk 开头的为公钥id
+    pub fn encode(&self) -> Result<String, bech32::Error> {
+        let v = self.hash();
+        let b = v.to_bytes();
+        bech32::encode(PK_HRP, b.to_base32())
     }
 }
 
+///解码bech32格式的字符串
+pub fn bech32_decode(s: &str) -> Result<(String, Vec<u8>), bech32::Error> {
+    let (hrp, data) = bech32::decode(&s)?;
+    let vdata = Vec::<u8>::from_base32(&data)?;
+    Ok((String::from(hrp), vdata))
+}
+
+#[test]
+fn test_pubkyeid() {
+    let kv = PriKey::new();
+    let pv = kv.pubkey();
+    let id = pv.encode().unwrap();
+    println!("{}", id);
+    println!("{:?}", bech32_decode(&id).unwrap());
+}
+
+impl PubKey {
+    pub fn hash(&self) -> Hasher {
+        let v = self.inner.serialize();
+        Hasher::new(&v[..])
+    }
+}
+
+#[derive(Debug)]
 pub struct PriKey {
     inner: SecretKey,
 }
@@ -149,7 +168,7 @@ impl PriKey {
     }
     //推导对应的公钥
     pub fn pubkey(&self) -> PubKey {
-        let ctx = actx.clone();
+        let ctx = Secp256k1::new();
         let inner = PublicKey::from_secret_key(&ctx, &self.inner);
         PubKey { inner: inner }
     }

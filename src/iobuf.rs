@@ -41,6 +41,7 @@ impl<'a> Reader<'a> {
     pub fn bytes(&self) -> &[u8] {
         self.inner
     }
+    //长度限制到最大255
     pub fn get<T>(&mut self) -> T
     where
         T: WithBytes<T>,
