@@ -25,4 +25,8 @@ pub enum Error {
     StackLenErr,
     //堆栈溢出
     StackOverlowErr,
+    //数据类型错误
+    StackEleTypeErr,
+    //执行脚本验证失败
+    ScriptVerifyErr,
 }

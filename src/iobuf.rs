@@ -1,4 +1,5 @@
 use crate::bytes::{Bytes, WithBytes};
+use crate::errors;
 use bytes::Buf;
 use bytes::BufMut;
 
@@ -11,6 +12,15 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    ///检测剩余字节必须>=l并返回剩余字节
+    pub fn check(&self, l: usize) -> Result<usize, errors::Error> {
+        let rl = self.remaining();
+        if rl < l {
+            Err(errors::Error::ScriptFmtErr)
+        } else {
+            Ok(rl)
+        }
+    }
     //剩余字节数
     pub fn remaining(&self) -> usize {
         self.inner.remaining()
@@ -44,6 +54,14 @@ impl<'a> Reader<'a> {
     }
     pub fn bytes(&self) -> &[u8] {
         self.inner
+    }
+    pub fn get_bytes(&mut self, size: usize) -> Vec<u8> {
+        let mut vp: Vec<u8> = Vec::with_capacity(size);
+        unsafe {
+            vp.set_len(size);
+        }
+        self.inner.copy_to_slice(vp.as_mut());
+        vp
     }
     //长度限制到最大255
     pub fn get<T>(&mut self) -> T
