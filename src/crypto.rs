@@ -1,15 +1,9 @@
 use crate::bytes::{Bytes, WithBytes};
+use crate::consts::PK_HRP;
 use crate::hasher::Hasher;
 use core::{fmt, str};
 use secp256k1::rand::rngs::OsRng;
-use secp256k1::{
-    All, Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, VerifyOnly,
-};
-use std::sync::Arc;
-///公钥前缀
-pub static PK_HRP: &str = "pk";
-///地址前缀
-pub static ADDR_HRP: &str = "btx";
+use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signature};
 
 //验证
 fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
@@ -231,7 +225,7 @@ fn test_iobuf() {
     let pk = PriKey::new();
     wb.put(&pk);
     let mut rb = wb.reader();
-    let v2: PriKey = rb.get();
+    let _v2: PriKey = rb.get();
 }
 
 #[test]

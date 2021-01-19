@@ -1,5 +1,5 @@
 use crate::bytes::{Bytes, WithBytes};
-use core::{fmt, str};
+use core::{fmt};
 use hex::ToHex;
 use sha2::{Digest, Sha256};
 

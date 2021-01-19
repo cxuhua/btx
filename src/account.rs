@@ -1,9 +1,10 @@
+use crate::consts::ADDR_HRP;
 use crate::crypto::{PriKey, PubKey, SigValue};
 use crate::errors;
-use core::fmt;
-
+use crate::iobuf;
+use bech32::ToBase32;
 /// 账户结构 多个私钥组成
-/// 经过按顺序链接后hash160生成地址
+/// 按顺序链接后hasher生成地址
 #[derive(Debug)]
 pub struct Account {
     //公钥数量
@@ -21,6 +22,7 @@ pub struct Account {
 }
 
 impl Account {
+    ///是否启用了仲裁公钥
     pub fn use_arb(&self) -> bool {
         self.arb != 0xFF
     }
@@ -38,6 +40,7 @@ impl Account {
         for _ in 0..acc.num {
             acc.pris.push(None);
             acc.pubs.push(None);
+            acc.sigs.push(None);
         }
         if is_gen {
             acc.initialize()
@@ -88,14 +91,85 @@ impl Account {
         }
         true
     }
-    ///获取地址id
-    pub fn id(&self) -> Result<String, errors::Error> {
-        Err(errors::Error::InvalidPublicKey)
+    ///带前缀编码地址
+    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
+        let mut wb = iobuf::Writer::default();
+        wb.u8(self.num);
+        wb.u8(self.less);
+        wb.u8(self.arb);
+        for pb in self.pubs.iter() {
+            match pb {
+                Some(pb) => {
+                    //公钥的hash值作为地址生成的一部分
+                    wb.put(&pb.hash());
+                }
+                None => {
+                    return Err(errors::Error::InvalidPublicKey);
+                }
+            }
+        }
+        let bb = wb.bytes();
+        match bech32::encode(hrp, bb.to_base32()) {
+            Ok(addr) => return Ok(addr),
+            Err(_) => return Err(errors::Error::InvalidAccount),
+        }
+    }
+    ///带固定前缀编码地址
+    pub fn encode(&self) -> Result<String, errors::Error> {
+        self.encode_with_hrp(ADDR_HRP)
+    }
+    ///使用指定的私钥签名消息 0 -> pris.len()
+    pub fn sign_with_index(&mut self, idx: usize, msg: &[u8]) -> Result<(), errors::Error> {
+        if idx >= self.pris.len() {
+            return Err(errors::Error::InvalidParam);
+        }
+        match &self.pris[idx] {
+            Some(pk) => match pk.sign(msg) {
+                Ok(sig) => {
+                    self.sigs[idx] = Some(sig);
+                    return Ok(());
+                }
+                Err(_) => {
+                    return Err(errors::Error::SignatureErr);
+                }
+            },
+            None => {
+                return Err(errors::Error::InvalidPrivateKey);
+            }
+        }
+    }
+    ///使用指定的公钥和签名验签
+    pub fn verify_with_index(&self, idx: usize, msg: &[u8]) -> Result<bool, errors::Error> {
+        if idx >= self.pubs.len() {
+            return Err(errors::Error::InvalidParam);
+        }
+        if idx >= self.sigs.len() {
+            return Err(errors::Error::InvalidParam);
+        }
+        match &self.pubs[idx] {
+            Some(pb) => match &self.sigs[idx] {
+                Some(sig) => match pb.verify(msg, &sig) {
+                    Ok(vb) => return Ok(vb),
+                    Err(_) => return Err(errors::Error::VerifySignErr),
+                },
+                None => {
+                    return Err(errors::Error::InvalidSignature);
+                }
+            },
+            None => {
+                return Err(errors::Error::InvalidPublicKey);
+            }
+        }
     }
 }
 
 #[test]
 fn test_account() {
-    let mut acc = Account::new(1, 1, false, true).unwrap();
+    let mut acc = Account::new(2, 2, false, true).unwrap();
+    acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
+    acc.sign_with_index(1, "aaa".as_bytes()).unwrap();
     println!("{:#?}", acc);
+    println!("{}", acc.encode().unwrap());
+    println!("{}", acc.verify_with_index(0, "aaa".as_bytes()).unwrap());
+    println!("{}", acc.verify_with_index(1, "aaa".as_bytes()).unwrap());
 }
