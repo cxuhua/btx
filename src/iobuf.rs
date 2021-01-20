@@ -68,10 +68,13 @@ impl<'a> Reader<'a> {
     where
         T: WithBytes<T>,
     {
-        let l = self.u8();
-        let mut dst = [0u8].repeat(l as usize);
-        self.inner.copy_to_slice(&mut dst);
-        T::with_bytes(&dst)
+        let size = self.u8() as usize;
+        let mut vp: Vec<u8> = Vec::with_capacity(size);
+        unsafe {
+            vp.set_len(size);
+        }
+        self.inner.copy_to_slice(vp.as_mut());
+        T::with_bytes(&vp)
     }
 }
 

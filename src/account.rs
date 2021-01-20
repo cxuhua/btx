@@ -1,6 +1,7 @@
-use crate::consts::ADDR_HRP;
+use crate::consts::{ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
 use crate::crypto::{PriKey, PubKey, SigValue};
 use crate::errors;
+use crate::hasher::Hasher;
 use crate::iobuf;
 use bech32::ToBase32;
 /// 账户结构 多个私钥组成
@@ -66,7 +67,7 @@ impl Account {
     ///检测是否有效
     fn check(&self) -> bool {
         //最少一个 最多16个公钥
-        if self.num < 1 || self.num > 16 {
+        if self.num < 1 || self.num > MAX_ACCOUNT_KEY_SIZE {
             return false;
         }
         //至少不能超过公钥数量
@@ -81,22 +82,20 @@ impl Account {
         if self.use_arb() && self.arb != self.num - 1 {
             return false;
         }
-        //私钥数量错误
-        if self.pris.len() != self.num as usize {
-            return false;
-        }
-        //私钥数量应该等于公钥数量
-        if self.pris.len() != self.pubs.len() {
-            return false;
-        }
         true
     }
-    ///带前缀编码地址
-    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
+    //hash账户用于生成地址
+    pub fn hash(&self) -> Result<Hasher, errors::Error> {
+        if !self.check() {
+            return Err(errors::Error::InvalidPublicKey);
+        }
         let mut wb = iobuf::Writer::default();
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
+        if self.pubs.len() == 0 {
+            return Err(errors::Error::InvalidPublicKey);
+        }
         for pb in self.pubs.iter() {
             match pb {
                 Some(pb) => {
@@ -109,6 +108,12 @@ impl Account {
             }
         }
         let bb = wb.bytes();
+        Ok(Hasher::new(bb))
+    }
+    ///带前缀编码地址
+    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
+        let hv = self.hash()?;
+        let bb = hv.to_bytes();
         match bech32::encode(hrp, bb.to_base32()) {
             Ok(addr) => return Ok(addr),
             Err(_) => return Err(errors::Error::InvalidAccount),
