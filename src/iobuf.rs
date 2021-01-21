@@ -76,6 +76,11 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(vp.as_mut());
         T::with_bytes(&vp)
     }
+    pub fn get_bytes(&mut self, size:usize) -> Vec[u8] {
+        let mut dst = [0u8].repeat(size);
+        self.inner.copy_to_slice(&mut dst);
+        dst.to_vec()
+    }
 }
 
 impl Default for Writer {
