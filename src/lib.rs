@@ -1,16 +1,11 @@
-mod address;
-mod coder;
-mod iobuf;
-mod u160;
-mod u256;
-mod crypto;
+#![allow(dead_code)]
+
+mod account;
 mod bytes;
-
-#[macro_use]
-extern crate custom_derive;
-
-#[macro_use]
-extern crate enum_derive;
-
-#[macro_use]
-extern crate lazy_static;
+mod coder;
+mod consts;
+mod crypto;
+mod errors;
+mod hasher;
+mod iobuf;
+mod script;

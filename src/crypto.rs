@@ -1,17 +1,14 @@
 use crate::bytes::{Bytes, WithBytes};
-use crate::u160::U160;
-use crate::u256::U256;
+use crate::consts::PK_HRP;
+use crate::hasher::Hasher;
 use core::{fmt, str};
 use secp256k1::rand::rngs::OsRng;
-use secp256k1::{
-    All, Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, Signing,
-    Verification, VerifyOnly,
-};
+use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signature};
 
 //验证
 fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
     let ctx = Secp256k1::verification_only();
-    let uv = U256::new(msg);
+    let uv = Hasher::new(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
 }
@@ -19,12 +16,13 @@ fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error>
 //签名
 fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
     let ctx = Secp256k1::signing_only();
-    let uv = U256::new(msg);
+    let uv = Hasher::new(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.sign(&msg, seckey))
 }
 
 ///签名结果
+#[derive(Debug)]
 pub struct SigValue {
     inner: Signature,
 }
@@ -69,6 +67,7 @@ impl Bytes for SigValue {
     }
 }
 
+#[derive(Debug)]
 pub struct PubKey {
     inner: PublicKey,
 }
@@ -109,20 +108,46 @@ impl fmt::LowerHex for PubKey {
     }
 }
 
+use bech32::{FromBase32, ToBase32};
+
 impl PubKey {
     ///验证签名数据
     pub fn verify(&self, msg: &[u8], sig: &SigValue) -> Result<bool, Error> {
         verify(msg, sig, &self.inner)
     }
-}
-
-impl PubKey {
-    pub fn hash(&self) -> U160 {
-        let v = self.inner.serialize();
-        U160::new(&v[..])
+    /// 编码公钥
+    /// pk 开头的为公钥id
+    pub fn encode(&self) -> Result<String, bech32::Error> {
+        let v = self.hash();
+        let b = v.to_bytes();
+        bech32::encode(PK_HRP, b.to_base32())
     }
 }
 
+///解码bech32格式的字符串
+pub fn bech32_decode(s: &str) -> Result<(String, Vec<u8>), bech32::Error> {
+    let (hrp, data) = bech32::decode(&s)?;
+    let vdata = Vec::<u8>::from_base32(&data)?;
+    Ok((String::from(hrp), vdata))
+}
+
+#[test]
+fn test_pubkyeid() {
+    let kv = PriKey::new();
+    let pv = kv.pubkey();
+    let id = pv.encode().unwrap();
+    println!("{}", id);
+    println!("{:?}", bech32_decode(&id).unwrap());
+}
+
+impl PubKey {
+    pub fn hash(&self) -> Hasher {
+        let v = self.inner.serialize();
+        Hasher::new(&v[..])
+    }
+}
+
+#[derive(Debug)]
 pub struct PriKey {
     inner: SecretKey,
 }
@@ -200,7 +225,7 @@ fn test_iobuf() {
     let pk = PriKey::new();
     wb.put(&pk);
     let mut rb = wb.reader();
-    let v2: PriKey = rb.get();
+    let _v2: PriKey = rb.get();
 }
 
 #[test]
