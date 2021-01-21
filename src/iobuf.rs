@@ -56,25 +56,25 @@ impl<'a> Reader<'a> {
         self.inner
     }
     pub fn get_bytes(&mut self, size: usize) -> Vec<u8> {
-        let mut vp: Vec<u8> = Vec::with_capacity(size);
         unsafe {
+            let mut vp: Vec<u8> = Vec::with_capacity(size);
             vp.set_len(size);
+            self.inner.copy_to_slice(vp.as_mut());
+            vp
         }
-        self.inner.copy_to_slice(vp.as_mut());
-        vp
     }
     //长度限制到最大255
     pub fn get<T>(&mut self) -> T
     where
         T: WithBytes<T>,
     {
-        let size = self.u8() as usize;
-        let mut vp: Vec<u8> = Vec::with_capacity(size);
         unsafe {
+            let size = self.u8() as usize;
+            let mut vp: Vec<u8> = Vec::with_capacity(size);
             vp.set_len(size);
+            self.inner.copy_to_slice(vp.as_mut());
+            T::with_bytes(&vp)
         }
-        self.inner.copy_to_slice(vp.as_mut());
-        T::with_bytes(&vp)
     }
 }
 
