@@ -7,22 +7,10 @@ use secp256k1::{
     All, Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, Signing,
     Verification, VerifyOnly,
 };
-use std::sync::Arc;
-
-lazy_static! {
-    //签名用
-    static ref sctx: Arc<Secp256k1<SignOnly>> = Arc::new(Secp256k1::signing_only());
-    //验证用
-    static ref vctx: Arc<Secp256k1<VerifyOnly>> = Arc::new(Secp256k1::verification_only());
-    //创建用
-    static ref actx: Arc<Secp256k1<All>> = Arc::new(Secp256k1::new());
-}
-
-///这个库包含签名相关类型
 
 //验证
 fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
-    let ctx = vctx.clone();
+    let ctx = Secp256k1::verification_only();
     let uv = U256::new(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
@@ -30,7 +18,7 @@ fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error>
 
 //签名
 fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
-    let ctx = sctx.clone();
+    let ctx = Secp256k1::signing_only();
     let uv = U256::new(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.sign(&msg, seckey))
@@ -149,7 +137,7 @@ impl PriKey {
     }
     //推导对应的公钥
     pub fn pubkey(&self) -> PubKey {
-        let ctx = actx.clone();
+        let ctx = Secp256k1::new();
         let inner = PublicKey::from_secret_key(&ctx, &self.inner);
         PubKey { inner: inner }
     }

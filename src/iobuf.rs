@@ -50,6 +50,11 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(&mut dst);
         T::with_bytes(&dst)
     }
+    pub fn get_bytes(&mut self, size:usize) -> Vec[u8] {
+        let mut dst = [0u8].repeat(size);
+        self.inner.copy_to_slice(&mut dst);
+        dst.to_vec()
+    }
 }
 
 impl Default for Writer {
@@ -72,6 +77,9 @@ impl Writer {
         Writer {
             inner: Vec::with_capacity(cap),
         }
+    }
+    pub fn put_bytes(&self, bb: &[u8]) {
+        self.inner.put(bb)
     }
     pub fn reader(&self) -> Reader {
         Reader {
