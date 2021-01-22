@@ -102,14 +102,14 @@ impl Exector {
         loop {
             step += 1;
             let op = reader.u8();
-            if op == OP_TRUE {
-                self.eles.push(Ele::from(true));
-            } else if op == OP_FALSE {
-                self.eles.push(Ele::from(false));
-            } else if op >= OP_00 && op <= OP_16 {
-                self.eles.push(Ele::from(op as i64));
-            } else if op >= OP_NUMBER_1 && op <= OP_NUMBER_8 {
-                match op {
+            match op {
+                OP_TRUE | OP_FALSE => {
+                    self.eles.push(Ele::from(op == OP_TRUE));
+                }
+                OP_00..=OP_16 => {
+                    self.eles.push(Ele::from(op as i64));
+                }
+                OP_NUMBER_1..=OP_NUMBER_8 => match op {
                     OP_NUMBER_1 => {
                         reader.check(1)?;
                         let v = reader.i8() as i64;
@@ -131,9 +131,8 @@ impl Exector {
                         self.eles.push(Ele::from(v));
                     }
                     _ => return Err(errors::Error::ScriptFmtErr),
-                }
-            } else if op >= OP_DATA_1 && op <= OP_DATA_4 {
-                match op {
+                },
+                OP_DATA_1..=OP_DATA_4 => match op {
                     OP_DATA_1 => {
                         reader.check(1)?;
                         let l = reader.u8() as usize;
@@ -156,31 +155,38 @@ impl Exector {
                         self.eles.push(Ele::from(d));
                     }
                     _ => return Err(errors::Error::ScriptFmtErr),
+                },
+                OP_VERIFY => {
+                    //验证顶部元素是否为true,不是返回错误,负责删除栈顶继续
+                    self.check(1)?;
+                    let val: bool = self.top(-1).try_into()?;
+                    self.pop(1)?;
+                    if !val {
+                        return Err(errors::Error::ScriptVerifyErr);
+                    }
                 }
-            } else if op == OP_VERIFY {
-                //验证顶部元素是否为true,不是返回错误,负责删除栈顶继续
-                self.check(1)?;
-                let val: bool = self.top(-1).try_into()?;
-                self.pop(1)?;
-                if !val {
-                    return Err(errors::Error::ScriptVerifyErr);
+                OP_EQUAL => {
+                    //比较栈顶的两个元素是否相等
+                    self.check(2)?;
+                    let l = self.top(-1);
+                    let r = self.top(-2);
+                    let b = l == r;
+                    self.pop(2)?;
+                    self.eles.push(Ele::from(b));
                 }
-            } else if op == OP_EQUAL {
-                //比较栈顶的两个元素是否相等
-                self.check(2)?;
-                let l = self.top(-1);
-                let r = self.top(-2);
-                let b = l == r;
-                self.pop(2)?;
-                self.eles.push(Ele::from(b));
-            } else if op == OP_NOT {
-                self.check(1)?;
-                let val: bool = self.top(-1).try_into()?;
-                self.pop(1)?;
-                self.eles.push(Ele::from(!val));
-            } else if op == OP_CHECKSIG {
-            } else {
-                return Err(errors::Error::ScriptFmtErr);
+                OP_NOT => {
+                    //对栈顶的bool值取反
+                    self.check(1)?;
+                    let val: bool = self.top(-1).try_into()?;
+                    self.pop(1)?;
+                    self.eles.push(Ele::from(!val));
+                }
+                OP_CHECKSIG => {
+                    //检测签名,放置结果到栈顶并销毁参数数据
+                }
+                _ => {
+                    return Err(errors::Error::ScriptFmtErr);
+                }
             }
             if step > consts::MAX_SCRIPT_OPS {
                 return Err(errors::Error::ScriptFmtErr);

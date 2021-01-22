@@ -127,12 +127,12 @@ impl Hasher {
     /// self: 最小工作难度
     /// stime : 时间间隔 默认:14 * 24 * 60 * 60 = 1209600 每14天2016个的速度
     /// ltime : 最后一个区块的时间
-    /// ntime : (最后一个区块的高度 - 2016 + 1)区块的时间
-    /// lpow : 最后一个区块的工作难度
-    pub fn compute_bits(&self, stime: u32, ltime: u32, ntime: u32, lpow: u32) -> u32 {
+    /// ptime : (最后一个区块的高度 - 2016 + 1)区块的时间
+    /// lbits : 最后一个区块的工作难度
+    pub fn compute_bits(&self, stime: u32, ltime: u32, ptime: u32, lbits: u32) -> u32 {
         debug_assert!(stime > 0);
-        debug_assert!(ltime > ntime);
-        let mut sub = ltime - ntime;
+        debug_assert!(ltime > ptime);
+        let mut sub = ltime - ptime;
         let sv = stime / 4;
         if sub < sv {
             sub = sv;
@@ -141,7 +141,7 @@ impl Hasher {
         if sub > sv {
             sub = sv;
         }
-        if let Ok(pow) = Hasher::try_from(lpow) {
+        if let Ok(pow) = Hasher::try_from(lbits) {
             let pow = pow * sub;
             let pow = pow / stime;
             if &pow > self {
