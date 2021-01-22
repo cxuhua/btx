@@ -387,7 +387,9 @@ impl Script {
     ///push binary
     pub fn data(&mut self, v: &[u8]) -> &mut Self {
         let l = v.len();
-        if l <= 0xFF {
+        if l == 0 {
+            return self;
+        } else if l <= 0xFF {
             self.op(OP_DATA_1);
             self.inner.put_u8(l as u8);
         } else if l <= 0xFFFF {
