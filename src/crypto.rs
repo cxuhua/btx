@@ -8,7 +8,7 @@ use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signature};
 //验证
 fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
     let ctx = Secp256k1::verification_only();
-    let uv = Hasher::new(msg);
+    let uv = Hasher::hash(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
 }
@@ -16,7 +16,7 @@ fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error>
 //签名
 fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
     let ctx = Secp256k1::signing_only();
-    let uv = Hasher::new(msg);
+    let uv = Hasher::hash(msg);
     let msg = Message::from_slice(uv.to_bytes())?;
     Ok(ctx.sign(&msg, seckey))
 }
@@ -143,7 +143,7 @@ fn test_pubkyeid() {
 impl PubKey {
     pub fn hash(&self) -> Hasher {
         let v = self.inner.serialize();
-        Hasher::new(&v[..])
+        Hasher::hash(&v[..])
     }
 }
 

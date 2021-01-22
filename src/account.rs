@@ -108,7 +108,7 @@ impl Account {
             }
         }
         let bb = wb.bytes();
-        Ok(Hasher::new(bb))
+        Ok(Hasher::hash(bb))
     }
     ///带前缀编码地址
     pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {

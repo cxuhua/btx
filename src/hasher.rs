@@ -8,49 +8,54 @@ pub const SIZE: usize = 32;
 use num_bigint::BigUint;
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
+use std::convert::{TryFrom, TryInto};
 use std::ops::{Div, Mul};
 
 #[test]
 fn test_compact() {
-    let h1 = Hasher::from_compact(0x170da8a1).unwrap();
+    let h1: Hasher = Hasher::try_from(0x170da8a1).unwrap();
     assert_eq!(h1.compact(), 0x170da8a1);
 
-    let h = Hasher::from_compact(0x1d00ffff).unwrap();
+    let h: Hasher = Hasher::try_from(0x1d00ffff).unwrap();
     assert_eq!(h.compact(), 0x1d00ffff);
 
-    let h = Hasher::from_compact(0x1b04864c).unwrap();
+    let h: Hasher = Hasher::try_from(0x1b04864c).unwrap();
     assert_eq!(h.compact(), 0x1b04864c);
 
-    let h = Hasher::from_compact(0x1a05db8b).unwrap();
+    let h: Hasher = Hasher::try_from(0x1a05db8b).unwrap();
     assert_eq!(h.compact(), 0x1a05db8b);
 
-    let h = Hasher::from_compact(0x18009645).unwrap();
+    let h: Hasher = Hasher::try_from(0x18009645).unwrap();
     assert_eq!(h.compact(), 0x18009645);
 }
 
 #[test]
 fn test_pow() {
     let limit =
-        Hasher::from_str("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+        Hasher::try_from("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
             .unwrap();
     assert_eq!(limit.compact(), 0x1d00ffff);
 
-    let hash = Hasher::from_str("0000000000000000000e20e727e0f9e4d88c44d68e572fbc9a2bd8c61e50010b")
+    let hash = Hasher::try_from("0000000000000000000e20e727e0f9e4d88c44d68e572fbc9a2bd8c61e50010b")
         .unwrap();
-    assert!(hash.check_pow(&limit, 0x1715b23e));
+    assert!(hash.verify_pow(&limit, 0x1715b23e));
 
-    let hash = Hasher::from_str("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+    let hash = Hasher::try_from("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
         .unwrap();
-    assert!(hash.check_pow(&limit, 0x1d00ffff));
+    assert!(hash.verify_pow(&limit, 0x1d00ffff));
 }
-
 #[test]
 fn test_compute_bits() {
     let limit =
-        Hasher::from_str("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+        Hasher::try_from("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
             .unwrap();
     let bits = limit.compute_bits(1209600, 1349255821, 1348121651, 0x1a05db8b);
     assert_eq!(bits, 0x1a057e08);
+
+    let vb: Hasher = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        .try_into()
+        .unwrap();
+    assert!(vb.verify_pow(&limit, 0x1d00ffff));
 }
 
 ///double sha256 hasher
@@ -62,6 +67,58 @@ pub struct Hasher {
 impl Default for Hasher {
     fn default() -> Self {
         return Hasher { inner: [0u8; SIZE] };
+    }
+}
+
+///从大数获取
+impl From<&BigUint> for Hasher {
+    fn from(v: &BigUint) -> Self {
+        let bb = v.to_bytes_be();
+        let mut inner = [0u8; SIZE];
+        let idx = if bb.len() > SIZE { 0 } else { SIZE - bb.len() };
+        inner[idx..].clone_from_slice(&bb);
+        inner.reverse();
+        Hasher { inner: inner }
+    }
+}
+
+///从16进制字符串获取
+impl TryFrom<&str> for Hasher {
+    type Error = hex::FromHexError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let b: Vec<u8> = Vec::from_hex(value.as_bytes())?;
+        let mut inner = [0u8; SIZE];
+        let idx = if b.len() > SIZE { 0 } else { SIZE - b.len() };
+        inner[idx..].copy_from_slice(&b);
+        inner.reverse();
+        Ok(Hasher { inner: inner })
+    }
+}
+
+///从工作难度获取一个hasher
+impl TryFrom<u32> for Hasher {
+    type Error = errors::Error;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        let s = value >> 24;
+        let mut w = value & 0x007fffff;
+        if s <= 3 {
+            w >>= 8 * (3 - s);
+            if let Some(v) = &BigUint::from_u32(w) {
+                return Ok(v.into());
+            }
+        } else {
+            if let Some(v) = &BigUint::from_u32(w) {
+                let v = &(v << 8 * (s - 3));
+                return Ok(v.into());
+            }
+        }
+        Err(errors::Error::InvalidParam)
+    }
+}
+
+impl From<&Hasher> for BigUint {
+    fn from(v: &Hasher) -> Self {
+        BigUint::from_bytes_le(&v.inner[..])
     }
 }
 
@@ -84,7 +141,7 @@ impl Hasher {
         if sub > sv {
             sub = sv;
         }
-        if let Ok(pow) = Hasher::from_compact(lpow) {
+        if let Ok(pow) = Hasher::try_from(lpow) {
             let pow = pow * sub;
             let pow = pow / stime;
             if &pow > self {
@@ -95,8 +152,8 @@ impl Hasher {
         return self.compact();
     }
     ///工作量证明检测
-    pub fn check_pow(&self, limit: &Hasher, bits: u32) -> bool {
-        if let Ok(v) = Hasher::from_compact(bits) {
+    pub fn verify_pow(&self, limit: &Hasher, bits: u32) -> bool {
+        if let Ok(v) = Hasher::try_from(bits) {
             //如果比最小难度大
             if &v > limit {
                 return false;
@@ -105,6 +162,7 @@ impl Hasher {
         }
         false
     }
+    //获取低64位
     fn low64(v: &Vec<u32>) -> u64 {
         if v.len() == 0 {
             return 0;
@@ -114,8 +172,9 @@ impl Hasher {
         }
         return (v[0] as u64) | (v[1] as u64) << 32;
     }
+    /// 获取32位表示的工作难度
     pub fn compact(&self) -> u32 {
-        let b = self.to_biguint();
+        let b: BigUint = self.into();
         let mut s = (b.bits() + 7) / 8;
         let mut cv: u64 = 0;
         if s <= 3 {
@@ -132,42 +191,8 @@ impl Hasher {
         cv |= s << 24;
         return cv as u32;
     }
-    pub fn from_compact(v: u32) -> Result<Hasher, errors::Error> {
-        let s = v >> 24;
-        let mut w = v & 0x007fffff;
-        if s <= 3 {
-            w >>= 8 * (3 - s);
-            if let Some(v) = BigUint::from_u32(w) {
-                return Ok(Hasher::from_biguint(&v));
-            }
-        } else {
-            if let Some(v) = BigUint::from_u32(w) {
-                let v = v << 8 * (s - 3);
-                return Ok(Hasher::from_biguint(&v));
-            }
-        }
-        Err(errors::Error::InvalidParam)
-    }
-    pub fn from_str(v: &str) -> Result<Self, hex::FromHexError> {
-        let b: Vec<u8> = Vec::from_hex(v.as_bytes())?;
-        let mut inner = [0u8; SIZE];
-        let idx = if b.len() > SIZE { 0 } else { SIZE - b.len() };
-        inner[idx..].copy_from_slice(&b);
-        inner.reverse();
-        Ok(Hasher { inner: inner })
-    }
-    fn to_biguint(&self) -> BigUint {
-        BigUint::from_bytes_le(&self.inner[..])
-    }
-    fn from_biguint(v: &BigUint) -> Self {
-        let bb = v.to_bytes_be();
-        let mut inner = [0u8; SIZE];
-        let idx = if bb.len() > SIZE { 0 } else { SIZE - bb.len() };
-        inner[idx..].clone_from_slice(&bb);
-        inner.reverse();
-        Hasher { inner: inner }
-    }
-    pub fn new(input: &[u8]) -> Self {
+    ///计算hash值
+    pub fn hash(input: &[u8]) -> Self {
         let mut sh = Sha256::new();
         sh.input(input);
         let mut uv = Hasher::default();
@@ -238,8 +263,8 @@ impl PartialOrd for Hasher {
 impl Ord for Hasher {
     #[inline]
     fn cmp(&self, other: &Hasher) -> Ordering {
-        let l = self.to_biguint();
-        let r = other.to_biguint();
+        let l: BigUint = self.into();
+        let r: BigUint = other.into();
         return l.cmp(&r);
     }
 }
@@ -249,8 +274,9 @@ impl Div<u32> for Hasher {
 
     #[inline]
     fn div(self, other: u32) -> Hasher {
-        let b = self.to_biguint() / other;
-        Hasher::from_biguint(&b)
+        let l: BigUint = (&self).into();
+        let b = &(l / other);
+        b.into()
     }
 }
 
@@ -259,21 +285,22 @@ impl Mul<u32> for Hasher {
 
     #[inline]
     fn mul(self, other: u32) -> Hasher {
-        let b = self.to_biguint() * other;
-        Hasher::from_biguint(&b)
+        let l: BigUint = (&self).into();
+        let b = &(l * other);
+        b.into()
     }
 }
 
 #[test]
 fn test_sha256() {
-    let x = Hasher::new("21134".as_bytes());
+    let x = Hasher::hash("21134".as_bytes());
     assert_eq!(
         x.encode_hex(),
         "e16222ebe45d144888cf12321e02452f8614e80d85ce9ade705e089060f516c1"
     );
-    let y = Hasher::new("12121".as_bytes());
+    let y = Hasher::hash("12121".as_bytes());
     assert_ne!(x, y);
-    let z = Hasher::new("21134".as_bytes());
+    let z = Hasher::hash("21134".as_bytes());
     assert_eq!(x, z);
 }
 
@@ -281,7 +308,7 @@ fn test_sha256() {
 fn test_wirter_u256() {
     use crate::iobuf::Writer;
     let mut wb = Writer::default();
-    let v1 = Hasher::new("thisi".as_bytes());
+    let v1 = Hasher::hash("thisi".as_bytes());
     wb.put(&v1);
     let mut rb = wb.reader();
     let v2: Hasher = rb.get();

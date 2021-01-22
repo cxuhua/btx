@@ -2,6 +2,7 @@ use crate::consts;
 use crate::errors;
 use crate::iobuf;
 use bytes::BufMut;
+use std::convert::{From, Into, TryFrom, TryInto};
 
 /// 放入0 - 16
 pub const OP_00: u8 = 0x00;
@@ -102,32 +103,32 @@ impl Exector {
             step += 1;
             let op = reader.u8();
             if op == OP_TRUE {
-                self.eles.push(Ele::bool(true));
+                self.eles.push(Ele::from(true));
             } else if op == OP_FALSE {
-                self.eles.push(Ele::bool(false));
+                self.eles.push(Ele::from(false));
             } else if op >= OP_00 && op <= OP_16 {
-                self.eles.push(Ele::number(op as i64));
+                self.eles.push(Ele::from(op as i64));
             } else if op >= OP_NUMBER_1 && op <= OP_NUMBER_8 {
                 match op {
                     OP_NUMBER_1 => {
                         reader.check(1)?;
                         let v = reader.i8() as i64;
-                        self.eles.push(Ele::number(v));
+                        self.eles.push(Ele::from(v));
                     }
                     OP_NUMBER_2 => {
                         reader.check(2)?;
                         let v = reader.i16() as i64;
-                        self.eles.push(Ele::number(v));
+                        self.eles.push(Ele::from(v));
                     }
                     OP_NUMBER_4 => {
                         reader.check(4)?;
                         let v = reader.i32() as i64;
-                        self.eles.push(Ele::number(v));
+                        self.eles.push(Ele::from(v));
                     }
                     OP_NUMBER_8 => {
                         reader.check(8)?;
                         let v = reader.i64() as i64;
-                        self.eles.push(Ele::number(v));
+                        self.eles.push(Ele::from(v));
                     }
                     _ => return Err(errors::Error::ScriptFmtErr),
                 }
@@ -138,28 +139,28 @@ impl Exector {
                         let l = reader.u8() as usize;
                         reader.check(l)?;
                         let d = reader.get_bytes(l);
-                        self.eles.push(Ele::data(d));
+                        self.eles.push(Ele::from(d));
                     }
                     OP_DATA_2 => {
                         reader.check(2)?;
                         let l = reader.u16() as usize;
                         reader.check(l)?;
                         let d = reader.get_bytes(l);
-                        self.eles.push(Ele::data(d));
+                        self.eles.push(Ele::from(d));
                     }
                     OP_DATA_4 => {
                         reader.check(4)?;
                         let l = reader.u32() as usize;
                         reader.check(l)?;
                         let d = reader.get_bytes(l);
-                        self.eles.push(Ele::data(d));
+                        self.eles.push(Ele::from(d));
                     }
                     _ => return Err(errors::Error::ScriptFmtErr),
                 }
             } else if op == OP_VERIFY {
                 //验证顶部元素是否为true,不是返回错误,负责删除栈顶继续
                 self.check(1)?;
-                let val = self.top(-1).as_bool()?;
+                let val: bool = self.top(-1).try_into()?;
                 self.pop(1)?;
                 if !val {
                     return Err(errors::Error::ScriptVerifyErr);
@@ -171,12 +172,12 @@ impl Exector {
                 let r = self.top(-2);
                 let b = l == r;
                 self.pop(2)?;
-                self.eles.push(Ele::bool(b));
+                self.eles.push(Ele::from(b));
             } else if op == OP_NOT {
                 self.check(1)?;
-                let val = self.top(-1).as_bool()?;
+                let val: bool = self.top(-1).try_into()?;
                 self.pop(1)?;
-                self.eles.push(Ele::bool(!val));
+                self.eles.push(Ele::from(!val));
             } else if op == OP_CHECKSIG {
             } else {
                 return Err(errors::Error::ScriptFmtErr);
@@ -200,7 +201,8 @@ fn test_op_not() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 1);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), true);
+    let b: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(b, true);
 
     let mut script = Script::new(32);
     script.bool(true);
@@ -208,7 +210,8 @@ fn test_op_not() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 1);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), false);
+    let b: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(b, false);
 }
 
 #[test]
@@ -220,7 +223,8 @@ fn test_op_equal() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 1);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), true);
+    let b: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(b, true);
 
     let mut script = Script::new(32);
     script.op(OP_01);
@@ -229,7 +233,8 @@ fn test_op_equal() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 1);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), true);
+    let b: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(b, true);
 
     let mut script = Script::new(32);
     script.string(&String::from("111"));
@@ -238,7 +243,8 @@ fn test_op_equal() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 1);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), false);
+    let b: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(b, false);
 
     let mut script = Script::new(32);
     script.string(&String::from("111"));
@@ -249,7 +255,8 @@ fn test_op_equal() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 1);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), true);
+    let b: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(b, true);
 }
 
 #[test]
@@ -270,8 +277,10 @@ fn test_push_data() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 2);
-    assert_eq!(exector.top(1).as_data().unwrap(), [1, 2, 3]);
-    assert_eq!(exector.top(2).as_data().unwrap(), [10, 20, 30]);
+    let d1: &[u8] = exector.top(1).try_into().unwrap();
+    assert_eq!(d1, [1, 2, 3]);
+    let d2: &[u8] = exector.top(2).try_into().unwrap();
+    assert_eq!(d2, [10, 20, 30]);
 }
 
 #[test]
@@ -284,10 +293,14 @@ fn test_push_number() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 4);
-    assert_eq!(exector.top(1).as_number().unwrap(), 8);
-    assert_eq!(exector.top(2).as_number().unwrap(), 16);
-    assert_eq!(exector.top(3).as_number().unwrap(), 32);
-    assert_eq!(exector.top(4).as_number().unwrap(), 64);
+    let d1: i64 = exector.top(1).try_into().unwrap();
+    let d2: i64 = exector.top(2).try_into().unwrap();
+    let d3: i64 = exector.top(3).try_into().unwrap();
+    let d4: i64 = exector.top(4).try_into().unwrap();
+    assert_eq!(d1, 8);
+    assert_eq!(d2, 16);
+    assert_eq!(d3, 32);
+    assert_eq!(d4, 64);
 }
 
 #[test]
@@ -300,7 +313,8 @@ fn test_push_number_0_16() {
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 17);
     for v in 1..=17 {
-        assert_eq!(exector.top(v).as_number().unwrap(), (v - 1) as i64);
+        let d1: i64 = exector.top(v).try_into().unwrap();
+        assert_eq!(d1, (v - 1) as i64);
     }
 }
 
@@ -312,10 +326,14 @@ fn test_push_bool() {
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
     assert_eq!(exector.len(), 2);
-    assert_eq!(exector.top(-1).as_bool().unwrap(), false);
-    assert_eq!(exector.top(-2).as_bool().unwrap(), true);
-    assert_eq!(exector.top(1).as_bool().unwrap(), true);
-    assert_eq!(exector.top(2).as_bool().unwrap(), false);
+    let d1: bool = exector.top(-1).try_into().unwrap();
+    assert_eq!(d1, false);
+    let d1: bool = exector.top(-2).try_into().unwrap();
+    assert_eq!(d1, true);
+    let d1: bool = exector.top(1).try_into().unwrap();
+    assert_eq!(d1, true);
+    let d1: bool = exector.top(2).try_into().unwrap();
+    assert_eq!(d1, false);
 }
 
 ///脚本生成
@@ -409,57 +427,84 @@ enum Ele {
     Data(Vec<u8>),
 }
 
-impl Ele {
-    fn as_bool(&self) -> Result<bool, errors::Error> {
-        if let Ele::Bool(pv) = self {
+impl TryFrom<&Ele> for bool {
+    type Error = errors::Error;
+    fn try_from(value: &Ele) -> Result<Self, Self::Error> {
+        if let Ele::Bool(pv) = value {
             return Ok(*pv);
         }
         return Err(errors::Error::StackEleTypeErr);
     }
-    fn as_number(&self) -> Result<i64, errors::Error> {
-        if let Ele::Number(pv) = self {
+}
+
+impl TryFrom<&Ele> for i64 {
+    type Error = errors::Error;
+    fn try_from(value: &Ele) -> Result<Self, Self::Error> {
+        if let Ele::Number(pv) = value {
             return Ok(*pv);
         }
         return Err(errors::Error::StackEleTypeErr);
     }
-    fn as_data(&self) -> Result<&[u8], errors::Error> {
-        if let Ele::Data(pv) = self {
+}
+
+impl<'a> TryFrom<&'a Ele> for &'a [u8] {
+    type Error = errors::Error;
+    fn try_from(value: &'a Ele) -> Result<Self, Self::Error> {
+        if let Ele::Data(pv) = value {
             return Ok(pv);
         }
         return Err(errors::Error::StackEleTypeErr);
     }
-    fn number(v: i64) -> Self {
-        Ele::Number(v)
+}
+
+impl From<bool> for Ele {
+    fn from(v: bool) -> Self {
+        Self::Bool(v)
     }
-    fn bool(v: bool) -> Self {
-        Ele::Bool(v)
+}
+
+impl From<i64> for Ele {
+    fn from(v: i64) -> Self {
+        Self::Number(v)
     }
-    fn data(v: Vec<u8>) -> Self {
-        Ele::Data(v)
+}
+
+impl From<Vec<u8>> for Ele {
+    fn from(v: Vec<u8>) -> Self {
+        Self::Data(v)
+    }
+}
+
+impl From<&Vec<u8>> for Ele {
+    fn from(v: &Vec<u8>) -> Self {
+        Self::Data(v.clone())
     }
 }
 
 impl PartialEq for Ele {
-    fn eq(&self, other: &Ele) -> bool {
-        self == other
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(l), Self::Bool(r)) => l == r,
+            (Self::Number(l), Self::Number(r)) => l == r,
+            (Self::Data(l), Self::Data(r)) => l == r,
+            _ => false,
+        }
     }
 }
 
-impl Eq for Ele {}
-
 #[test]
 fn test_ele_equ() {
-    let bl = Ele::bool(true);
-    let br = Ele::bool(true);
-    let bv = Ele::bool(false);
+    let bl = Ele::from(true);
+    let br = Ele::from(true);
+    let bv = Ele::from(false);
     assert_eq!(bl, bl);
     assert_eq!(bl, br);
     assert_ne!(bv, bl);
     assert_ne!(bv, br);
 
-    let il = Ele::number(1);
-    let ir = Ele::number(1);
-    let iv = Ele::number(123);
+    let il = Ele::from(1);
+    let ir = Ele::from(1);
+    let iv = Ele::from(123);
     assert_eq!(il, il);
     assert_eq!(il, ir);
     assert_ne!(iv, il);
@@ -467,9 +512,9 @@ fn test_ele_equ() {
 
     assert_ne!(bl, il);
 
-    let dl = Ele::data("123".as_bytes().to_vec());
-    let dr = Ele::data("123".as_bytes().to_vec());
-    let dv = Ele::data("456".as_bytes().to_vec());
+    let dl = Ele::from("123".as_bytes().to_vec());
+    let dr = Ele::from("123".as_bytes().to_vec());
+    let dv = Ele::from("456".as_bytes().to_vec());
     assert_eq!(dl, dl);
     assert_eq!(dl, dr);
     assert_ne!(dv, dl);
