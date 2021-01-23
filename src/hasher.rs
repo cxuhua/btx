@@ -144,10 +144,9 @@ impl Hasher {
         if let Ok(pow) = Hasher::try_from(lbits) {
             let pow = pow * sub;
             let pow = pow / stime;
-            if &pow > self {
-                return self.compact();
+            if &pow <= self {
+                return pow.compact();
             }
-            return pow.compact();
         }
         return self.compact();
     }
