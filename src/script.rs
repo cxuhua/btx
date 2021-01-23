@@ -101,7 +101,7 @@ impl Exector {
         let mut step = 0;
         loop {
             step += 1;
-            let op = reader.u8();
+            let op = reader.u8()?;
             match op {
                 OP_TRUE | OP_FALSE => {
                     self.eles.push(Ele::from(op == OP_TRUE));
@@ -111,47 +111,37 @@ impl Exector {
                 }
                 OP_NUMBER_1..=OP_NUMBER_8 => match op {
                     OP_NUMBER_1 => {
-                        reader.check(1)?;
-                        let v = reader.i8() as i64;
+                        let v = reader.i8()? as i64;
                         self.eles.push(Ele::from(v));
                     }
                     OP_NUMBER_2 => {
-                        reader.check(2)?;
-                        let v = reader.i16() as i64;
+                        let v = reader.i16()? as i64;
                         self.eles.push(Ele::from(v));
                     }
                     OP_NUMBER_4 => {
-                        reader.check(4)?;
-                        let v = reader.i32() as i64;
+                        let v = reader.i32()? as i64;
                         self.eles.push(Ele::from(v));
                     }
                     OP_NUMBER_8 => {
-                        reader.check(8)?;
-                        let v = reader.i64() as i64;
+                        let v = reader.i64()? as i64;
                         self.eles.push(Ele::from(v));
                     }
                     _ => return Err(errors::Error::ScriptFmtErr),
                 },
                 OP_DATA_1..=OP_DATA_4 => match op {
                     OP_DATA_1 => {
-                        reader.check(1)?;
-                        let l = reader.u8() as usize;
-                        reader.check(l)?;
-                        let d = reader.get_bytes(l);
+                        let l = reader.u8()? as usize;
+                        let d = reader.get_bytes(l)?;
                         self.eles.push(Ele::from(d));
                     }
                     OP_DATA_2 => {
-                        reader.check(2)?;
-                        let l = reader.u16() as usize;
-                        reader.check(l)?;
-                        let d = reader.get_bytes(l);
+                        let l = reader.u16()? as usize;
+                        let d = reader.get_bytes(l)?;
                         self.eles.push(Ele::from(d));
                     }
                     OP_DATA_4 => {
-                        reader.check(4)?;
-                        let l = reader.u32() as usize;
-                        reader.check(l)?;
-                        let d = reader.get_bytes(l);
+                        let l = reader.u32()? as usize;
+                        let d = reader.get_bytes(l)?;
                         self.eles.push(Ele::from(d));
                     }
                     _ => return Err(errors::Error::ScriptFmtErr),

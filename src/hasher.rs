@@ -311,6 +311,6 @@ fn test_wirter_u256() {
     let v1 = Hasher::hash("thisi".as_bytes());
     wb.put(&v1);
     let mut rb = wb.reader();
-    let v2: Hasher = rb.get();
+    let v2: Hasher = rb.get().unwrap();
     assert_eq!(v1, v2);
 }

@@ -225,7 +225,7 @@ fn test_iobuf() {
     let pk = PriKey::new();
     wb.put(&pk);
     let mut rb = wb.reader();
-    let _v2: PriKey = rb.get();
+    let _v2: PriKey = rb.get().unwrap();
 }
 
 #[test]
