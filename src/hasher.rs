@@ -215,11 +215,11 @@ impl Hasher {
     }
 }
 
-impl WithBytes<Hasher> for Hasher {
-    fn with_bytes(bb: &Vec<u8>) -> Hasher {
+impl WithBytes for Hasher {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let mut inner = [0u8; SIZE];
         inner.copy_from_slice(&bb);
-        Hasher { inner: inner }
+        Ok(Hasher { inner: inner })
     }
 }
 

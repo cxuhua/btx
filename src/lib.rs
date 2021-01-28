@@ -9,3 +9,4 @@ mod errors;
 mod hasher;
 mod iobuf;
 mod script;
+mod block;

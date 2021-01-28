@@ -1,3 +1,4 @@
+use crate::bytes::{Bytes, WithBytes};
 use crate::consts;
 use crate::errors;
 use crate::iobuf;
@@ -417,6 +418,19 @@ impl Script {
         return self;
     }
 }
+
+impl Bytes for Script {
+    fn bytes(&self) -> Vec<u8> {
+        self.inner.clone()
+    }
+}
+
+impl WithBytes for Script {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self,errors::Error> {
+        Ok(Script { inner: bb.clone() })
+    }
+}
+
 ///栈元素
 #[derive(Debug)]
 enum Ele {

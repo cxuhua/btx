@@ -21,6 +21,16 @@ impl<'a> Reader<'a> {
             Ok(rl)
         }
     }
+    pub fn usize(&mut self) -> Result<usize, errors::Error> {
+        let b = self.u8()?;
+        if b & 0x80 == 0 {
+            return Ok(b as usize);
+        }
+        let b1 = b & 0x7F;
+        let b2 = self.u8()?;
+        let size = ((b1 as usize) << 8) | (b2 as usize);
+        return Ok(size);
+    }
     //剩余字节数
     pub fn remaining(&self) -> usize {
         self.inner.remaining()
@@ -72,19 +82,19 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(vp.as_mut());
         Ok(vp)
     }
-    //长度限制到最大255
+    
     pub fn get<T>(&mut self) -> Result<T, errors::Error>
     where
-        T: WithBytes<T>,
+        T: WithBytes,
     {
-        let size = self.u8()? as usize;
+        let size = self.usize()?;
         let mut vp: Vec<u8> = Vec::with_capacity(size);
         unsafe {
             vp.set_len(size);
         }
         self.check(size)?;
         self.inner.copy_to_slice(vp.as_mut());
-        Ok(T::with_bytes(&vp))
+        T::with_bytes(&vp)
     }
 }
 
@@ -95,13 +105,26 @@ impl Default for Writer {
 }
 
 impl Writer {
+    //动态整数 支持0..=0x7FFF
+    pub fn usize(&mut self, size: usize) {
+        if size <= 0x7F {
+            self.u8(size as u8);
+        } else if size <= 0x7FFF {
+            let low = (size & 0xFF) as u8;
+            let high = (size >> 8) & 0xFF;
+            let high = high | 0x80;
+            self.u8(high as u8);
+            self.u8(low as u8);
+        } else {
+            assert!(size <= 0x7FFF);
+        }
+    }
     pub fn put<T>(&mut self, v: &T)
     where
         T: Bytes,
     {
         let bb = v.bytes();
-        assert!(bb.len() <= 0xFF);
-        self.u8(bb.len() as u8);
+        self.usize(bb.len());
         self.inner.put(&bb[..])
     }
     pub fn new(cap: usize) -> Self {
@@ -141,6 +164,21 @@ impl Writer {
     pub fn i64(&mut self, v: i64) {
         self.inner.put_i64_le(v);
     }
+}
+
+#[test]
+fn test_usize() {
+    let mut wb = Writer::default();
+    wb.usize(0xFF1);
+    wb.usize(0x60);
+    wb.usize(0x0);
+    wb.usize(0x7FFF);
+    let mut rb = wb.reader();
+    assert_eq!(rb.remaining(), 6);
+    assert_eq!(rb.usize().unwrap(), 0xFF1);
+    assert_eq!(rb.usize().unwrap(), 0x60);
+    assert_eq!(rb.usize().unwrap(), 0x0);
+    assert_eq!(rb.usize().unwrap(), 0x7FFF);
 }
 
 #[test]

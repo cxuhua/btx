@@ -1,5 +1,6 @@
 use crate::bytes::{Bytes, WithBytes};
 use crate::consts::PK_HRP;
+use crate::errors;
 use crate::hasher::Hasher;
 use core::{fmt, str};
 use secp256k1::rand::rngs::OsRng;
@@ -53,10 +54,10 @@ impl fmt::LowerHex for SigValue {
     }
 }
 
-impl WithBytes<SigValue> for SigValue {
-    fn with_bytes(bb: &Vec<u8>) -> SigValue {
+impl WithBytes for SigValue {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let inner = Signature::from_der(&bb).unwrap();
-        SigValue { inner: inner }
+        Ok(SigValue { inner: inner })
     }
 }
 
@@ -82,10 +83,10 @@ impl str::FromStr for PubKey {
     }
 }
 
-impl WithBytes<PubKey> for PubKey {
-    fn with_bytes(bb: &Vec<u8>) -> PubKey {
+impl WithBytes for PubKey {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let inner = PublicKey::from_slice(&bb).unwrap();
-        PubKey { inner: inner }
+        Ok(PubKey { inner: inner })
     }
 }
 
@@ -168,10 +169,10 @@ impl PriKey {
     }
 }
 
-impl WithBytes<PriKey> for PriKey {
-    fn with_bytes(bb: &Vec<u8>) -> PriKey {
+impl WithBytes for PriKey {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let inner = SecretKey::from_slice(&bb).unwrap();
-        PriKey { inner: inner }
+        Ok(PriKey { inner: inner })
     }
 }
 
