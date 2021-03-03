@@ -148,7 +148,7 @@ impl Exector {
                     _ => return Err(errors::Error::ScriptFmtErr),
                 },
                 OP_VERIFY => {
-                    //验证顶部元素是否为true,不是返回错误,负责删除栈顶继续
+                    //验证顶部元素是否为true,不是返回错误,否则删除栈顶继续
                     self.check(1)?;
                     let val: bool = self.top(-1).try_into()?;
                     self.pop(1)?;
@@ -303,8 +303,8 @@ fn test_push_number() {
 #[test]
 fn test_push_number_0_16() {
     let mut script = Script::new(32);
-    for v in 0..=16 {
-        script.op(v as u8);
+    for v in OP_00..=OP_16 {
+        script.op(v);
     }
     let mut exector = Exector::new();
     exector.exec(&script).unwrap();
@@ -334,8 +334,17 @@ fn test_push_bool() {
 }
 
 ///脚本生成
+#[derive(Debug)]
 pub struct Script {
     inner: Vec<u8>,
+}
+
+impl Clone for Script {
+    fn clone(&self) -> Self {
+        Script {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl Default for Script {
@@ -426,7 +435,7 @@ impl Bytes for Script {
 }
 
 impl WithBytes for Script {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self,errors::Error> {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         Ok(Script { inner: bb.clone() })
     }
 }

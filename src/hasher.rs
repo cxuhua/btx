@@ -64,6 +64,14 @@ pub struct Hasher {
     inner: [u8; SIZE],
 }
 
+impl Clone for Hasher {
+    fn clone(&self) -> Self {
+        Hasher {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl Default for Hasher {
     fn default() -> Self {
         return Hasher { inner: [0u8; SIZE] };
@@ -171,7 +179,7 @@ impl Hasher {
         }
         return (v[0] as u64) | (v[1] as u64) << 32;
     }
-    /// 获取32位表示的工作难度
+    ///取32位表示的工作难度
     pub fn compact(&self) -> u32 {
         let b: BigUint = self.into();
         let mut s = (b.bits() + 7) / 8;
@@ -270,7 +278,6 @@ impl Ord for Hasher {
 
 impl Div<u32> for Hasher {
     type Output = Hasher;
-
     #[inline]
     fn div(self, other: u32) -> Hasher {
         let l: BigUint = (&self).into();
@@ -281,7 +288,6 @@ impl Div<u32> for Hasher {
 
 impl Mul<u32> for Hasher {
     type Output = Hasher;
-
     #[inline]
     fn mul(self, other: u32) -> Hasher {
         let l: BigUint = (&self).into();

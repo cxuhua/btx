@@ -4,6 +4,7 @@ use crate::hasher::Hasher;
 use crate::iobuf::{Reader, Writer};
 use crate::script::Script;
 ///区块定义
+#[derive(Debug)]
 pub struct Block {
     ///区块版本
     ver: u32,
@@ -19,6 +20,27 @@ pub struct Block {
     nonce: u32,
     ///交易列表
     txs: Vec<Tx>,
+}
+
+impl Clone for Block {
+    fn clone(&self) -> Self {
+        Block {
+            ver: self.ver,
+            prev: self.prev.clone(),
+            merkle: self.merkle.clone(),
+            time: self.time,
+            bits: self.bits,
+            nonce: self.nonce,
+            txs: self.txs.clone(),
+        }
+    }
+}
+
+impl Block {
+    ///追加交易元素
+    fn append(&mut self, tx: Tx) {
+        self.txs.push(tx)
+    }
 }
 
 impl Default for Block {
@@ -71,6 +93,7 @@ impl WithBytes for Block {
 }
 
 ///交易
+#[derive(Debug)]
 pub struct Tx {
     ///交易版本
     ver: u32,
@@ -78,6 +101,16 @@ pub struct Tx {
     ins: Vec<TxIn>,
     ///输出列表
     outs: Vec<TxOut>,
+}
+
+impl Clone for Tx {
+    fn clone(&self) -> Self {
+        Tx {
+            ver: self.ver,
+            ins: self.ins.clone(),
+            outs: self.outs.clone(),
+        }
+    }
 }
 
 impl Bytes for Tx {
@@ -118,6 +151,7 @@ impl WithBytes for Tx {
 }
 
 ///交易输入
+#[derive(Debug)]
 pub struct TxIn {
     ///消费的交易id
     out: Hasher,
@@ -127,6 +161,17 @@ pub struct TxIn {
     script: Script,
     ///序列号
     seq: u32,
+}
+
+impl Clone for TxIn {
+    fn clone(&self) -> Self {
+        TxIn {
+            out: self.out.clone(),
+            idx: self.idx,
+            script: self.script.clone(),
+            seq: self.seq,
+        }
+    }
 }
 
 impl Bytes for TxIn {
@@ -153,11 +198,21 @@ impl WithBytes for TxIn {
 }
 
 ///交易输出
+#[derive(Debug)]
 pub struct TxOut {
     ///输入金额
     value: i64,
     ///输出脚本
     script: Script,
+}
+
+impl Clone for TxOut {
+    fn clone(&self) -> Self {
+        TxOut {
+            script: self.script.clone(),
+            value: self.value,
+        }
+    }
 }
 
 impl Bytes for TxOut {
@@ -180,4 +235,20 @@ impl WithBytes for TxOut {
 }
 
 #[test]
-fn test_block() {}
+fn test_block() {
+    let mut s = Script::new(32);
+    s.op(crate::script::OP_00);
+    s.op(crate::script::OP_01);
+    s.op(crate::script::OP_02);
+    let i = TxIn {
+        out: Hasher::default(),
+        idx: 0,
+        script: s,
+        seq: 0,
+    };
+    let mut wb = Writer::default();
+    wb.put(&i);
+    let mut rb = wb.reader();
+    let o: TxIn = rb.get().unwrap();
+    println!("{:?}", o);
+}
