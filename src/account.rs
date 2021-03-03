@@ -63,7 +63,7 @@ impl WithBytes for Account {
         for i in 0..r.u8()? as usize {
             acc.sigs[i] = Some(r.get()?);
         }
-        if !acc.check_with_script() {
+        if !acc.check_with_pubs_and_sigs() {
             return Err(errors::Error::InvalidAccount);
         }
         Ok(acc)
@@ -143,7 +143,7 @@ impl Account {
         }
     }
     //从脚本获取时检测
-    fn check_with_script(&self) -> bool {
+    fn check_with_pubs_and_sigs(&self) -> bool {
         if !self.check() {
             return false;
         }
@@ -236,27 +236,61 @@ impl Account {
             }
         }
     }
-    ///使用指定的公钥和签名验签
+    ///使用指定的公钥验签所有签名,如果其中一个通过返回true
     pub fn verify_with_index(&self, idx: usize, msg: &[u8]) -> Result<bool, errors::Error> {
         if idx >= self.pubs.len() {
             return Err(errors::Error::InvalidParam);
         }
-        if idx >= self.sigs.len() {
-            return Err(errors::Error::InvalidParam);
+        //
+        let pb = self.pubs[idx].as_ref();
+        if pb.is_none() {
+            return Err(errors::Error::InvalidPublicKey);
         }
-        match &self.pubs[idx] {
-            Some(pb) => match &self.sigs[idx] {
-                Some(sig) => match pb.verify(msg, &sig) {
-                    Ok(vb) => return Ok(vb),
-                    Err(_) => return Err(errors::Error::VerifySignErr),
-                },
-                None => {
-                    return Err(errors::Error::InvalidSignature);
-                }
-            },
-            None => {
-                return Err(errors::Error::InvalidPublicKey);
+        let pb = pb.unwrap();
+        //逐个验证签名
+        for iv in self.sigs.iter().filter(|&v| v.is_some()) {
+            let sb = iv.as_ref().unwrap();
+            let ret = pb.verify(msg, sb);
+            if ret.is_err() {
+                continue;
+            }
+            if ret.unwrap() {
+                return Ok(true);
             }
         }
+        return Err(errors::Error::VerifySignErr);
     }
+    ///标准验签
+    pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
+        if !self.check_with_pubs_and_sigs() {
+            return Err(errors::Error::InvalidAccount);
+        }
+        //验证仲裁公钥签名
+        if self.use_arb() {
+            return self.verify_with_index(self.arb as usize, msg);
+        }
+        let mut less = self.less;
+        for i in 0..self.pubs.len() {
+            match self.verify_with_index(i, msg) {
+                Ok(rb) => {
+                    if rb {
+                        less -= 1;
+                    }
+                    if less == 0 {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        Ok(less == 0)
+    }
+}
+
+#[test]
+fn test_account_verify() {
+    let mut acc = Account::new(2, 2, false, true).unwrap();
+    acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
+    acc.sign_with_index(1, "aaa".as_bytes()).unwrap();
+    assert_eq!(true, acc.verify("aaa".as_bytes()).unwrap());
 }
