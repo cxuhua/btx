@@ -3,10 +3,20 @@ use crate::errors;
 use bytes::Buf;
 use bytes::BufMut;
 
+#[derive(Debug)]
 pub struct Writer {
     inner: Vec<u8>,
 }
 
+impl Clone for Writer {
+    fn clone(&self) -> Self {
+        Writer {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Reader<'a> {
     inner: &'a [u8],
 }
@@ -82,7 +92,6 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(vp.as_mut());
         Ok(vp)
     }
-    
     pub fn get<T>(&mut self) -> Result<T, errors::Error>
     where
         T: WithBytes,
@@ -101,6 +110,18 @@ impl<'a> Reader<'a> {
 impl Default for Writer {
     fn default() -> Self {
         Writer::new(32)
+    }
+}
+
+impl Bytes for Writer {
+    fn bytes(&self) -> Vec<u8> {
+        self.inner.to_vec()
+    }
+}
+
+impl WithBytes for Writer {
+    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+        Ok(Writer { inner: bb.clone() })
     }
 }
 
@@ -132,6 +153,9 @@ impl Writer {
             inner: Vec::with_capacity(cap),
         }
     }
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
     pub fn bytes(&self) -> &[u8] {
         &self.inner[..]
     }
@@ -139,6 +163,9 @@ impl Writer {
         Reader {
             inner: &self.inner[..],
         }
+    }
+    pub fn put_bytes(&mut self, b: &[u8]) {
+        self.inner.put(b)
     }
     pub fn u8(&mut self, v: u8) {
         self.inner.put_u8(v);

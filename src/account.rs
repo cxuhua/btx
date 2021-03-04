@@ -103,7 +103,7 @@ impl Account {
     }
     ///是否启用了仲裁公钥
     pub fn use_arb(&self) -> bool {
-        self.arb != 0xFF
+        self.arb != 0xFF && self.arb == (self.num - 1)
     }
     ///创建一个默认账户
     ///is_gen 是否创建新的私钥
@@ -142,7 +142,7 @@ impl Account {
             self.pubs[i] = Some(pb);
         }
     }
-    //从脚本获取时检测
+    //从脚本获取时检测公钥和签名
     fn check_with_pubs_and_sigs(&self) -> bool {
         if !self.check() {
             return false;
@@ -152,7 +152,7 @@ impl Account {
             return false;
         }
         //不启用仲裁时最小签名数量
-        if !self.use_arb() && self.sigs_size() != self.less {
+        if !self.use_arb() && self.sigs_size() < self.less {
             return false;
         }
         true
@@ -196,6 +196,7 @@ impl Account {
                     wb.put(&pb.hash());
                 }
                 None => {
+                    //公钥必须存在的
                     return Err(errors::Error::InvalidPublicKey);
                 }
             }
@@ -273,17 +274,12 @@ impl Account {
         if isig >= self.sigs.len() {
             return Err(errors::Error::InvalidParam);
         }
-        let pb = self.pubs[ipub].as_ref();
-        if pb.is_none() {
-            return Err(errors::Error::InvalidPublicKey);
-        }
-        let sb = self.sigs[isig].as_ref();
-        if sb.is_none() {
-            return Err(errors::Error::InvalidPublicKey);
-        }
-        match pb.unwrap().verify(msg, sb.unwrap()) {
-            Ok(rb) => Ok(rb),
-            Err(_) => Err(errors::Error::VerifySignErr),
+        match (&self.pubs[ipub], &self.sigs[isig]) {
+            (Some(pb), Some(sb)) => match pb.verify(msg, sb) {
+                Ok(rb) => Ok(rb),
+                _ => Err(errors::Error::VerifySignErr),
+            },
+            _ => return Err(errors::Error::InvalidParam),
         }
     }
     ///标准验签
@@ -297,12 +293,11 @@ impl Account {
         }
         //检测是否达到签名要求
         let mut less = self.less;
-        let mut j = 0;
-        let mut i = 0;
+        let (mut i, mut j) = (0, 0);
         while i < self.sigs.len() && j < self.pubs.len() {
             let sig = &self.sigs[i];
             if sig.is_none() {
-                i += 1;
+                i += 1; //下个签名
                 continue;
             }
             let rb = self.verify_with_index(j, i, msg);
@@ -320,9 +315,17 @@ impl Account {
 }
 
 #[test]
-fn test_account_verify() {
+fn test_account_verify_true() {
     let mut acc = Account::new(5, 2, false, true).unwrap();
     acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
     acc.sign_with_index(1, "aaa".as_bytes()).unwrap();
     assert_eq!(true, acc.verify("aaa".as_bytes()).unwrap());
+}
+
+#[test]
+fn test_account_verify_false() {
+    let mut acc = Account::new(5, 2, false, true).unwrap();
+    acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
+    acc.sign_with_index(1, "bbb".as_bytes()).unwrap();
+    assert_eq!(false, acc.verify("aaa".as_bytes()).unwrap());
 }

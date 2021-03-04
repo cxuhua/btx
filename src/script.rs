@@ -58,7 +58,7 @@ struct Exector {
 }
 
 impl Exector {
-    //
+    //获取元素数量
     fn len(&self) -> usize {
         self.eles.len()
     }
@@ -74,6 +74,7 @@ impl Exector {
             &self.eles[(n - 1) as usize]
         }
     }
+    ///
     fn pop(&mut self, n: usize) -> Result<(), errors::Error> {
         if self.eles.len() < n {
             return Err(errors::Error::StackLenErr);
@@ -81,6 +82,7 @@ impl Exector {
         self.eles.truncate(self.eles.len() - n);
         Ok(())
     }
+    ///
     fn new() -> Exector {
         Exector { eles: vec![] }
     }
@@ -95,7 +97,7 @@ impl Exector {
     }
     ///执行脚本
     fn exec(&mut self, script: &Script) -> Result<usize, errors::Error> {
-        let mut reader = iobuf::Reader::new(script.to_bytes());
+        let mut reader = script.reader();
         if reader.remaining() == 0 {
             return Err(errors::Error::ScriptEmptyErr);
         }
@@ -333,16 +335,26 @@ fn test_push_bool() {
     assert_eq!(d1, false);
 }
 
+#[test]
+fn test_script_concat() {
+    let mut script1 = Script::new(32);
+    script1.op(1);
+    let mut script2 = Script::new(32);
+    script2.op(2);
+    script1.concat(&script2);
+    assert_eq!(2, script1.len())
+}
+
 ///脚本生成
 #[derive(Debug)]
 pub struct Script {
-    inner: Vec<u8>,
+    writer: iobuf::Writer,
 }
 
 impl Clone for Script {
     fn clone(&self) -> Self {
         Script {
-            inner: self.inner.clone(),
+            writer: self.writer.clone(),
         }
     }
 }
@@ -354,18 +366,27 @@ impl Default for Script {
 }
 
 impl Script {
+    //获取脚本长度
+    pub fn len(&self) -> usize {
+        self.writer.len()
+    }
+    ///获取一个读取对象
+    pub fn reader(&self) -> iobuf::Reader {
+        self.writer.reader()
+    }
     ///获取脚本内容
     pub fn to_bytes(&self) -> &[u8] {
-        return &self.inner[..];
+        return self.writer.bytes();
     }
+    ///创建脚本对象
     pub fn new(cap: usize) -> Self {
         Script {
-            inner: Vec::with_capacity(cap),
+            writer: iobuf::Writer::new(cap),
         }
     }
     ///链接另外一个脚本
     pub fn concat(&mut self, script: &Script) -> &mut Self {
-        self.inner.put(script.to_bytes());
+        self.writer.put_bytes(script.writer.bytes());
         return self;
     }
     ///push bool
@@ -376,7 +397,7 @@ impl Script {
     }
     ///push op
     pub fn op(&mut self, op: u8) -> &mut Self {
-        self.inner.put_u8(op);
+        self.writer.u8(op);
         return self;
     }
     ///push string
@@ -391,52 +412,55 @@ impl Script {
             return self;
         } else if l <= 0xFF {
             self.op(OP_DATA_1);
-            self.inner.put_u8(l as u8);
+            self.writer.u8(l as u8);
         } else if l <= 0xFFFF {
             self.op(OP_DATA_2);
-            self.inner.put_u16(l as u16);
+            self.writer.u16(l as u16);
         } else if l <= 0xFFFFFFFF {
             self.op(OP_DATA_4);
-            self.inner.put_u32(l as u32);
+            self.writer.u32(l as u32);
         }
-        self.inner.put(v);
+        self.writer.put_bytes(v);
         return self;
     }
     ///push number
     pub fn i8(&mut self, v: i8) -> &mut Self {
         self.op(OP_NUMBER_1);
-        self.inner.put_i8(v);
+        self.writer.i8(v);
         return self;
     }
     ///push number
     pub fn i16(&mut self, v: i16) -> &mut Self {
         self.op(OP_NUMBER_2);
-        self.inner.put_i16_le(v);
+        self.writer.i16(v);
         return self;
     }
     ///push number
     pub fn i32(&mut self, v: i32) -> &mut Self {
         self.op(OP_NUMBER_4);
-        self.inner.put_i32_le(v);
+        self.writer.i32(v);
         return self;
     }
     ///push number
     pub fn i64(&mut self, v: i64) -> &mut Self {
         self.op(OP_NUMBER_8);
-        self.inner.put_i64_le(v);
+        self.writer.i64(v);
         return self;
     }
 }
 
 impl Bytes for Script {
     fn bytes(&self) -> Vec<u8> {
-        self.inner.clone()
+        self.writer.bytes().to_vec()
     }
 }
 
 impl WithBytes for Script {
     fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
-        Ok(Script { inner: bb.clone() })
+        match iobuf::Writer::with_bytes(bb) {
+            Ok(w) => Ok(Script { writer: w }),
+            Err(err) => Err(err),
+        }
     }
 }
 
