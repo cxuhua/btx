@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, WithBytes};
+use crate::bytes::{IntoBytes, FromBytes};
 use crate::errors;
 use core::fmt;
 use hex::{FromHex, ToHex};
@@ -223,16 +223,16 @@ impl Hasher {
     }
 }
 
-impl WithBytes for Hasher {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for Hasher {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let mut inner = [0u8; SIZE];
         inner.copy_from_slice(&bb);
         Ok(Hasher { inner: inner })
     }
 }
 
-impl Bytes for Hasher {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for Hasher {
+    fn into_bytes(&self) -> Vec<u8> {
         self.inner[..].to_vec()
     }
 }

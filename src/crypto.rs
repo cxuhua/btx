@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, WithBytes};
+use crate::bytes::{IntoBytes, FromBytes};
 use crate::consts::PK_HRP;
 use crate::errors;
 use crate::hasher::Hasher;
@@ -54,15 +54,15 @@ impl fmt::LowerHex for SigValue {
     }
 }
 
-impl WithBytes for SigValue {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for SigValue {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let inner = Signature::from_der(&bb).unwrap();
         Ok(SigValue { inner: inner })
     }
 }
 
-impl Bytes for SigValue {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for SigValue {
+    fn into_bytes(&self) -> Vec<u8> {
         let sig = self.inner.serialize_der();
         sig.as_ref().to_vec()
     }
@@ -83,15 +83,15 @@ impl str::FromStr for PubKey {
     }
 }
 
-impl WithBytes for PubKey {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for PubKey {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let inner = PublicKey::from_slice(&bb).unwrap();
         Ok(PubKey { inner: inner })
     }
 }
 
-impl Bytes for PubKey {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for PubKey {
+    fn into_bytes(&self) -> Vec<u8> {
         let sig = self.inner.serialize();
         sig.to_vec()
     }
@@ -169,15 +169,15 @@ impl PriKey {
     }
 }
 
-impl WithBytes for PriKey {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for PriKey {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let inner = SecretKey::from_slice(&bb).unwrap();
         Ok(PriKey { inner: inner })
     }
 }
 
-impl Bytes for PriKey {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for PriKey {
+    fn into_bytes(&self) -> Vec<u8> {
         self.inner[..].to_vec()
     }
 }
@@ -234,7 +234,7 @@ fn test_signer() {
     let kv = PriKey::new();
     let pv = kv.pubkey();
     let signature = kv.sign("adfs".as_bytes()).unwrap();
-    println!("{:x?}", signature.bytes());
+    println!("{:x?}", signature.into_bytes());
     println!("{}", signature);
     assert!(!pv.verify("adfs1".as_bytes(), &signature).unwrap());
     assert!(pv.verify("adfs".as_bytes(), &signature).unwrap());

@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, WithBytes};
+use crate::bytes::{IntoBytes, FromBytes};
 use crate::errors;
 use bytes::Buf;
 use bytes::BufMut;
@@ -80,9 +80,11 @@ impl<'a> Reader<'a> {
         self.check(8)?;
         Ok(self.inner.get_i64_le())
     }
+    //获取所有数据
     pub fn bytes(&self) -> &[u8] {
         self.inner
     }
+    //获取指定长度的数据
     pub fn get_bytes(&mut self, size: usize) -> Result<Vec<u8>, errors::Error> {
         self.check(size)?;
         let mut vp: Vec<u8> = Vec::with_capacity(size);
@@ -94,7 +96,7 @@ impl<'a> Reader<'a> {
     }
     pub fn get<T>(&mut self) -> Result<T, errors::Error>
     where
-        T: WithBytes,
+        T: FromBytes,
     {
         let size = self.usize()?;
         let mut vp: Vec<u8> = Vec::with_capacity(size);
@@ -103,7 +105,7 @@ impl<'a> Reader<'a> {
         }
         self.check(size)?;
         self.inner.copy_to_slice(vp.as_mut());
-        T::with_bytes(&vp)
+        T::from_bytes(&vp)
     }
 }
 
@@ -113,14 +115,14 @@ impl Default for Writer {
     }
 }
 
-impl Bytes for Writer {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for Writer {
+    fn into_bytes(&self) -> Vec<u8> {
         self.inner.to_vec()
     }
 }
 
-impl WithBytes for Writer {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for Writer {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         Ok(Writer { inner: bb.clone() })
     }
 }
@@ -142,9 +144,9 @@ impl Writer {
     }
     pub fn put<T>(&mut self, v: &T)
     where
-        T: Bytes,
+        T: IntoBytes,
     {
-        let bb = v.bytes();
+        let bb = v.into_bytes();
         self.usize(bb.len());
         self.inner.put(&bb[..])
     }

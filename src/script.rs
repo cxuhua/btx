@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, WithBytes};
+use crate::bytes::{IntoBytes, FromBytes};
 use crate::consts;
 use crate::errors;
 use crate::iobuf;
@@ -341,8 +341,11 @@ fn test_script_concat() {
     script1.op(1);
     let mut script2 = Script::new(32);
     script2.op(2);
-    script1.concat(&script2);
-    assert_eq!(2, script1.len())
+    let mut script3 = Script::new(32);
+    script3.op(3);
+    script3.concat(&script2);
+    script1.concat(&script3);
+    assert_eq!(3, script1.len())
 }
 
 ///脚本生成
@@ -449,15 +452,15 @@ impl Script {
     }
 }
 
-impl Bytes for Script {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for Script {
+    fn into_bytes(&self) -> Vec<u8> {
         self.writer.bytes().to_vec()
     }
 }
 
-impl WithBytes for Script {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
-        match iobuf::Writer::with_bytes(bb) {
+impl FromBytes for Script {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+        match iobuf::Writer::from_bytes(bb) {
             Ok(w) => Ok(Script { writer: w }),
             Err(err) => Err(err),
         }

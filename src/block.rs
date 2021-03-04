@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, WithBytes};
+use crate::bytes::{IntoBytes, FromBytes};
 use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf::{Reader, Writer};
@@ -57,8 +57,8 @@ impl Default for Block {
     }
 }
 
-impl Bytes for Block {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for Block {
+    fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.u32(self.ver);
         wb.put(&self.prev);
@@ -74,8 +74,8 @@ impl Bytes for Block {
     }
 }
 
-impl WithBytes for Block {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Block, errors::Error> {
+impl FromBytes for Block {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Block, errors::Error> {
         let mut r = Reader::new(bb);
         let mut v = Block::default();
         v.ver = r.u32()?;
@@ -113,8 +113,8 @@ impl Clone for Tx {
     }
 }
 
-impl Bytes for Tx {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for Tx {
+    fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.u32(self.ver);
         wb.u16(self.ins.len() as u16);
@@ -129,8 +129,8 @@ impl Bytes for Tx {
     }
 }
 
-impl WithBytes for Tx {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for Tx {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let mut r = Reader::new(bb);
         let mut v = Tx {
             ver: 0,
@@ -174,8 +174,8 @@ impl Clone for TxIn {
     }
 }
 
-impl Bytes for TxIn {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for TxIn {
+    fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.put(&self.out);
         wb.u16(self.idx);
@@ -185,8 +185,8 @@ impl Bytes for TxIn {
     }
 }
 
-impl WithBytes for TxIn {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for TxIn {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let mut r = Reader::new(bb);
         Ok(TxIn {
             out: r.get()?,
@@ -215,8 +215,8 @@ impl Clone for TxOut {
     }
 }
 
-impl Bytes for TxOut {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for TxOut {
+    fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.i64(self.value);
         wb.put(self);
@@ -224,8 +224,8 @@ impl Bytes for TxOut {
     }
 }
 
-impl WithBytes for TxOut {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+impl FromBytes for TxOut {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let mut r = Reader::new(bb);
         Ok(TxOut {
             value: r.i64()?,

@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, WithBytes};
+use crate::bytes::{IntoBytes, FromBytes};
 use crate::consts::{ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
 use crate::crypto::{PriKey, PubKey, SigValue};
 use crate::errors;
@@ -25,8 +25,8 @@ pub struct Account {
 }
 
 ///转为脚本数据,不包含私钥
-impl Bytes for Account {
-    fn bytes(&self) -> Vec<u8> {
+impl IntoBytes for Account {
+    fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.u8(self.num);
         wb.u8(self.less);
@@ -50,8 +50,8 @@ impl Bytes for Account {
 }
 
 //从脚本数据获取,不包含私钥
-impl WithBytes for Account {
-    fn with_bytes(bb: &Vec<u8>) -> Result<Account, errors::Error> {
+impl FromBytes for Account {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Account, errors::Error> {
         let mut r = Reader::new(bb);
         let num = r.u8()?;
         let less = r.u8()?;
