@@ -53,7 +53,7 @@ impl Clone for Block {
 
 impl Block {
     ///追加交易元素
-    fn append(&mut self, tx: Tx) {
+    pub fn append(&mut self, tx: Tx) {
         self.txs.push(tx)
     }
 }
