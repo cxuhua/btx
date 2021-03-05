@@ -1,8 +1,9 @@
-use crate::bytes::{IntoBytes, FromBytes};
+use crate::bytes::{FromBytes, IntoBytes};
 use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf::{Reader, Writer};
 use crate::script::Script;
+
 ///区块定义
 #[derive(Debug)]
 pub struct Block {
@@ -20,6 +21,20 @@ pub struct Block {
     nonce: u32,
     ///交易列表
     txs: Vec<Tx>,
+}
+
+impl Default for Block {
+    fn default() -> Self {
+        Block {
+            ver: 1,
+            prev: Hasher::default(),
+            merkle: Hasher::default(),
+            time: 0,
+            bits: 0,
+            nonce: 0,
+            txs: vec![],
+        }
+    }
 }
 
 impl Clone for Block {
@@ -40,20 +55,6 @@ impl Block {
     ///追加交易元素
     fn append(&mut self, tx: Tx) {
         self.txs.push(tx)
-    }
-}
-
-impl Default for Block {
-    fn default() -> Self {
-        Block {
-            ver: 1,
-            prev: Hasher::default(),
-            merkle: Hasher::default(),
-            time: 0,
-            bits: 0,
-            nonce: 0,
-            txs: vec![],
-        }
     }
 }
 
@@ -101,6 +102,16 @@ pub struct Tx {
     ins: Vec<TxIn>,
     ///输出列表
     outs: Vec<TxOut>,
+}
+
+impl Default for Tx {
+    fn default() -> Self {
+        Tx {
+            ver: 1,
+            ins: vec![],
+            outs: vec![],
+        }
+    }
 }
 
 impl Clone for Tx {
@@ -163,6 +174,17 @@ pub struct TxIn {
     seq: u32,
 }
 
+impl Default for TxIn {
+    fn default() -> Self {
+        TxIn {
+            out: Hasher::default(),
+            idx: 0,
+            script: Script::default(),
+            seq: 0,
+        }
+    }
+}
+
 impl Clone for TxIn {
     fn clone(&self) -> Self {
         TxIn {
@@ -188,12 +210,13 @@ impl IntoBytes for TxIn {
 impl FromBytes for TxIn {
     fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
         let mut r = Reader::new(bb);
-        Ok(TxIn {
+        let inv = TxIn {
             out: r.get()?,
             idx: r.u16()?,
             script: r.get()?,
             seq: r.u32()?,
-        })
+        };
+        Ok(inv)
     }
 }
 
@@ -204,6 +227,15 @@ pub struct TxOut {
     value: i64,
     ///输出脚本
     script: Script,
+}
+
+impl Default for TxOut {
+    fn default() -> Self {
+        TxOut {
+            value: 0,
+            script: Script::default(),
+        }
+    }
 }
 
 impl Clone for TxOut {

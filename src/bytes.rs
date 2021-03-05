@@ -5,7 +5,7 @@ pub trait IntoBytes: Sized {
     fn into_bytes(&self) -> Vec<u8>;
 }
 
-//从进制生成
+///从进制生成
 pub trait FromBytes: IntoBytes {
     fn from_bytes(bb: &Vec<u8>) -> Result<Self, Error>;
 }

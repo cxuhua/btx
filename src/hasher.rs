@@ -1,4 +1,4 @@
-use crate::bytes::{IntoBytes, FromBytes};
+use crate::bytes::{FromBytes, IntoBytes};
 use crate::errors;
 use core::fmt;
 use hex::{FromHex, ToHex};
@@ -198,16 +198,20 @@ impl Hasher {
         cv |= s << 24;
         return cv as u32;
     }
-    ///计算hash值
+    ///计算hash值 double sha256
     pub fn hash(input: &[u8]) -> Self {
+        //1
         let mut sh = Sha256::new();
         sh.input(input);
-        let mut uv = Hasher::default();
-        uv.inner.copy_from_slice(&sh.result());
+        let shv = sh.result();
+        //2
         let mut sh = Sha256::new();
-        sh.input(&uv.inner);
-        uv.inner.copy_from_slice(&sh.result());
-        return uv;
+        sh.input(&shv);
+        let shv = sh.result();
+        //
+        let mut inner = [0u8; SIZE];
+        inner.copy_from_slice(&shv);
+        Hasher { inner: inner }
     }
     pub fn with_bytes(input: [u8; SIZE]) -> Self {
         Hasher { inner: input }
@@ -246,6 +250,15 @@ impl PartialEq for Hasher {
 
 //a == a
 impl Eq for Hasher {}
+
+#[test]
+fn test_hasher_equ() {
+    let x = Hasher::hash("12345".as_bytes());
+    let y = Hasher::hash("12345".as_bytes());
+    let z = Hasher::hash("12346".as_bytes());
+    assert_eq!(true, x == y);
+    assert_eq!(false, x == z);
+}
 
 impl fmt::LowerHex for Hasher {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
