@@ -1,4 +1,4 @@
-use crate::bytes::{IntoBytes, FromBytes};
+use crate::bytes::{FromBytes, IntoBytes};
 use crate::errors;
 use bytes::Buf;
 use bytes::BufMut;
@@ -148,6 +148,13 @@ impl Writer {
     {
         let bb = v.into_bytes();
         self.usize(bb.len());
+        self.inner.put(&bb[..])
+    }
+    pub fn append<T>(&mut self, v: &T)
+    where
+        T: IntoBytes,
+    {
+        let bb = v.into_bytes();
         self.inner.put(&bb[..])
     }
     pub fn new(cap: usize) -> Self {

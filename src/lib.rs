@@ -11,3 +11,4 @@ mod iobuf;
 mod script;
 mod block;
 mod util;
+mod merkle;

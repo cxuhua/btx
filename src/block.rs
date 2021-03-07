@@ -62,14 +62,14 @@ impl IntoBytes for Block {
     fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.u32(self.ver);
-        wb.put(&self.prev);
-        wb.put(&self.merkle);
+        wb.append(&self.prev);
+        wb.append(&self.merkle);
         wb.u32(self.time);
         wb.u32(self.bits);
         wb.u32(self.nonce);
         wb.u16(self.txs.len() as u16);
         for v in self.txs.iter() {
-            wb.put(v);
+            wb.append(v);
         }
         return wb.bytes().to_vec();
     }
