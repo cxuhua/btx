@@ -202,12 +202,12 @@ impl Hasher {
     pub fn hash(input: &[u8]) -> Self {
         //1
         let mut sh = Sha256::new();
-        sh.input(input);
-        let shv = sh.result();
+        sh.update(input);
+        let shv = sh.finalize();
         //2
         let mut sh = Sha256::new();
-        sh.input(&shv);
-        let shv = sh.result();
+        sh.update(&shv);
+        let shv = sh.finalize();
         //
         let mut inner = [0u8; SIZE];
         inner.copy_from_slice(&shv);
