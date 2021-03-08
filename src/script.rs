@@ -1,7 +1,8 @@
-use crate::bytes::{IntoBytes, FromBytes};
+use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts;
 use crate::errors;
 use crate::iobuf;
+use crate::iobuf::{Reader, Serializer, Writer};
 use bytes::BufMut;
 use std::convert::{From, Into, TryFrom, TryInto};
 
@@ -449,6 +450,15 @@ impl Script {
         self.op(OP_NUMBER_8);
         self.writer.i64(v);
         return self;
+    }
+}
+
+impl Serializer for Script {
+    fn encode(&self, w: &mut Writer) {
+        w.put(self);
+    }
+    fn decode(r: &mut Reader) -> Result<Script, errors::Error> {
+        r.get()
     }
 }
 

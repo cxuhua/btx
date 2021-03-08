@@ -1,5 +1,6 @@
 use crate::bytes::{FromBytes, IntoBytes};
 use crate::errors;
+use crate::iobuf::{Reader, Serializer, Writer};
 use core::fmt;
 use hex::{FromHex, ToHex};
 use sha2::{Digest, Sha256};
@@ -62,6 +63,28 @@ fn test_compute_bits() {
 #[derive(Debug)]
 pub struct Hasher {
     inner: [u8; SIZE],
+}
+
+impl Serializer for Hasher {
+    fn encode(&self, wb: &mut Writer) {
+        wb.put_bytes(&self.inner);
+    }
+    fn decode(r: &mut Reader) -> Result<Hasher, errors::Error> {
+        let b = r.get_bytes(SIZE)?;
+        let mut inner = [0u8; SIZE];
+        inner.copy_from_slice(&b);
+        Ok(Hasher { inner: inner })
+    }
+}
+
+#[test]
+fn test_hasher_serializer() {
+    let mut wb = Writer::default();
+    let h1 = Hasher::hash("aa".as_bytes());
+    h1.encode(&mut wb);
+    let mut r = wb.reader();
+    let h2: Hasher = r.decode().unwrap();
+    assert_eq!(h1, h2);
 }
 
 impl Clone for Hasher {

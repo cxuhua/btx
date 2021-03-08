@@ -1,7 +1,7 @@
 use crate::bytes::{FromBytes, IntoBytes};
 use crate::errors;
 use crate::hasher::Hasher;
-use crate::iobuf::{Reader, Writer};
+use crate::iobuf::{Reader, Serializer, Writer};
 use crate::script::Script;
 
 ///区块定义
@@ -62,14 +62,14 @@ impl IntoBytes for Block {
     fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
         wb.u32(self.ver);
-        wb.append(&self.prev);
-        wb.append(&self.merkle);
+        wb.put(&self.prev);
+        wb.put(&self.merkle);
         wb.u32(self.time);
         wb.u32(self.bits);
         wb.u32(self.nonce);
         wb.u16(self.txs.len() as u16);
         for v in self.txs.iter() {
-            wb.append(v);
+            wb.put(v);
         }
         return wb.bytes().to_vec();
     }
@@ -102,6 +102,37 @@ pub struct Tx {
     ins: Vec<TxIn>,
     ///输出列表
     outs: Vec<TxOut>,
+}
+
+impl Serializer for Tx {
+    fn encode(&self, wb: &mut Writer) {
+        wb.u32(self.ver);
+        wb.u16(self.ins.len() as u16);
+        for inv in self.ins.iter() {
+            inv.encode(wb);
+        }
+        wb.u16(self.outs.len() as u16);
+        for out in self.outs.iter() {
+            out.encode(wb);
+        }
+    }
+    fn decode(r: &mut Reader) -> Result<Tx, errors::Error> {
+        let mut v = Tx {
+            ver: 0,
+            ins: vec![],
+            outs: vec![],
+        };
+        v.ver = r.u32()?;
+        for _ in 0..r.u16()? {
+            let iv: TxIn = r.decode()?;
+            v.ins.push(iv);
+        }
+        for _ in 0..r.u16()? {
+            let iv: TxOut = r.decode()?;
+            v.outs.push(iv);
+        }
+        Ok(v)
+    }
 }
 
 impl Default for Tx {
@@ -174,6 +205,23 @@ pub struct TxIn {
     seq: u32,
 }
 
+impl Serializer for TxIn {
+    fn encode(&self, wb: &mut Writer) {
+        wb.put(&self.out);
+        wb.u16(self.idx);
+        self.script.encode(wb);
+        wb.u32(self.seq);
+    }
+    fn decode(r: &mut Reader) -> Result<TxIn, errors::Error> {
+        Ok(TxIn {
+            out: r.decode()?,
+            idx: r.u16()?,
+            script: r.decode()?,
+            seq: r.u32()?,
+        })
+    }
+}
+
 impl Default for TxIn {
     fn default() -> Self {
         TxIn {
@@ -244,6 +292,19 @@ impl Clone for TxOut {
             script: self.script.clone(),
             value: self.value,
         }
+    }
+}
+
+impl Serializer for TxOut {
+    fn encode(&self, w: &mut Writer) {
+        w.i64(self.value);
+        self.script.encode(w);
+    }
+    fn decode(r: &mut Reader) -> Result<TxOut, errors::Error> {
+        Ok(TxOut {
+            value: r.i64()?,
+            script: r.decode()?,
+        })
     }
 }
 

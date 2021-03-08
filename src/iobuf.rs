@@ -3,6 +3,14 @@ use crate::errors;
 use bytes::Buf;
 use bytes::BufMut;
 
+///二机制生成
+pub trait Serializer: Sized {
+    fn encode(&self, w: &mut Writer);
+    fn decode(r: &mut Reader) -> Result<Self, errors::Error>
+    where
+        Self: Default;
+}
+
 #[derive(Debug)]
 pub struct Writer {
     inner: Vec<u8>,
@@ -94,6 +102,7 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(vp.as_mut());
         Ok(vp)
     }
+    ///use put放入的使用get取出
     pub fn get<T>(&mut self) -> Result<T, errors::Error>
     where
         T: FromBytes,
@@ -106,6 +115,13 @@ impl<'a> Reader<'a> {
         self.check(size)?;
         self.inner.copy_to_slice(vp.as_mut());
         T::from_bytes(&vp)
+    }
+    ///
+    pub fn decode<T>(&mut self) -> Result<T, errors::Error>
+    where
+        T: Serializer + Default,
+    {
+        T::decode(self)
     }
 }
 
@@ -128,6 +144,12 @@ impl FromBytes for Writer {
 }
 
 impl Writer {
+    pub fn encode<T>(&mut self, v: T)
+    where
+        T: Serializer,
+    {
+        v.encode(self);
+    }
     //动态整数 支持0..=0x7FFF
     pub fn usize(&mut self, size: usize) {
         if size <= 0x7F {
@@ -148,13 +170,6 @@ impl Writer {
     {
         let bb = v.into_bytes();
         self.usize(bb.len());
-        self.inner.put(&bb[..])
-    }
-    pub fn append<T>(&mut self, v: &T)
-    where
-        T: IntoBytes,
-    {
-        let bb = v.into_bytes();
         self.inner.put(&bb[..])
     }
     pub fn new(cap: usize) -> Self {
