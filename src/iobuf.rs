@@ -125,6 +125,16 @@ impl<'a> Reader<'a> {
     }
 }
 
+//a == b
+impl PartialEq for Writer {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+//a == a
+impl Eq for Writer {}
+
 impl Default for Writer {
     fn default() -> Self {
         Writer::new(32)

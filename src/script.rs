@@ -453,6 +453,16 @@ impl Script {
     }
 }
 
+//a == b
+impl PartialEq for Script {
+    fn eq(&self, other: &Self) -> bool {
+        self.writer == other.writer
+    }
+}
+
+//a == a
+impl Eq for Script {}
+
 impl Serializer for Script {
     fn encode(&self, w: &mut Writer) {
         w.put(self);

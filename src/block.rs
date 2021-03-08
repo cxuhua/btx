@@ -224,5 +224,8 @@ fn test_block() {
     wb.encode(&i);
     let mut rb = wb.reader();
     let o: TxIn = rb.decode().unwrap();
-    println!("{:?}", o);
+    assert_eq!(i.out,o.out);
+    assert_eq!(i.idx,o.idx);
+    assert_eq!(i.script,o.script);
+    assert_eq!(i.seq,o.seq);
 }
