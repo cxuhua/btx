@@ -144,7 +144,7 @@ impl FromBytes for Writer {
 }
 
 impl Writer {
-    pub fn encode<T>(&mut self, v: T)
+    pub fn encode<T>(&mut self, v: &T)
     where
         T: Serializer,
     {

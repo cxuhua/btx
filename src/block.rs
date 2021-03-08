@@ -58,41 +58,6 @@ impl Block {
     }
 }
 
-impl IntoBytes for Block {
-    fn into_bytes(&self) -> Vec<u8> {
-        let mut wb = Writer::default();
-        wb.u32(self.ver);
-        wb.put(&self.prev);
-        wb.put(&self.merkle);
-        wb.u32(self.time);
-        wb.u32(self.bits);
-        wb.u32(self.nonce);
-        wb.u16(self.txs.len() as u16);
-        for v in self.txs.iter() {
-            wb.put(v);
-        }
-        return wb.bytes().to_vec();
-    }
-}
-
-impl FromBytes for Block {
-    fn from_bytes(bb: &Vec<u8>) -> Result<Block, errors::Error> {
-        let mut r = Reader::new(bb);
-        let mut v = Block::default();
-        v.ver = r.u32()?;
-        v.prev = r.get()?;
-        v.merkle = r.get()?;
-        v.time = r.u32()?;
-        v.bits = r.u32()?;
-        v.nonce = r.u32()?;
-        for _ in 0..r.u16()? {
-            let iv: Tx = r.get()?;
-            v.txs.push(iv);
-        }
-        Ok(v)
-    }
-}
-
 ///交易
 #[derive(Debug)]
 pub struct Tx {
@@ -117,11 +82,7 @@ impl Serializer for Tx {
         }
     }
     fn decode(r: &mut Reader) -> Result<Tx, errors::Error> {
-        let mut v = Tx {
-            ver: 0,
-            ins: vec![],
-            outs: vec![],
-        };
+        let mut v = Tx::default();
         v.ver = r.u32()?;
         for _ in 0..r.u16()? {
             let iv: TxIn = r.decode()?;
@@ -155,43 +116,6 @@ impl Clone for Tx {
     }
 }
 
-impl IntoBytes for Tx {
-    fn into_bytes(&self) -> Vec<u8> {
-        let mut wb = Writer::default();
-        wb.u32(self.ver);
-        wb.u16(self.ins.len() as u16);
-        for inv in self.ins.iter() {
-            wb.put(inv);
-        }
-        wb.u16(self.outs.len() as u16);
-        for out in self.outs.iter() {
-            wb.put(out);
-        }
-        return wb.bytes().to_vec();
-    }
-}
-
-impl FromBytes for Tx {
-    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
-        let mut r = Reader::new(bb);
-        let mut v = Tx {
-            ver: 0,
-            ins: vec![],
-            outs: vec![],
-        };
-        v.ver = r.u32()?;
-        for _ in 0..r.u16()? {
-            let iv: TxIn = r.get()?;
-            v.ins.push(iv);
-        }
-        for _ in 0..r.u16()? {
-            let iv: TxOut = r.get()?;
-            v.outs.push(iv);
-        }
-        Ok(v)
-    }
-}
-
 ///交易输入
 #[derive(Debug)]
 pub struct TxIn {
@@ -207,18 +131,18 @@ pub struct TxIn {
 
 impl Serializer for TxIn {
     fn encode(&self, wb: &mut Writer) {
-        wb.put(&self.out);
+        wb.encode(&self.out);
         wb.u16(self.idx);
-        self.script.encode(wb);
+        wb.encode(&self.script);
         wb.u32(self.seq);
     }
     fn decode(r: &mut Reader) -> Result<TxIn, errors::Error> {
-        Ok(TxIn {
-            out: r.decode()?,
-            idx: r.u16()?,
-            script: r.decode()?,
-            seq: r.u32()?,
-        })
+        let mut i = TxIn::default();
+        i.out = r.decode()?;
+        i.idx = r.u16()?;
+        i.script = r.decode()?;
+        i.seq = r.u32()?;
+        Ok(i)
     }
 }
 
@@ -241,30 +165,6 @@ impl Clone for TxIn {
             script: self.script.clone(),
             seq: self.seq,
         }
-    }
-}
-
-impl IntoBytes for TxIn {
-    fn into_bytes(&self) -> Vec<u8> {
-        let mut wb = Writer::default();
-        wb.put(&self.out);
-        wb.u16(self.idx);
-        wb.put(&self.script);
-        wb.u32(self.seq);
-        return wb.bytes().to_vec();
-    }
-}
-
-impl FromBytes for TxIn {
-    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
-        let mut r = Reader::new(bb);
-        let inv = TxIn {
-            out: r.get()?,
-            idx: r.u16()?,
-            script: r.get()?,
-            seq: r.u32()?,
-        };
-        Ok(inv)
     }
 }
 
@@ -298,32 +198,13 @@ impl Clone for TxOut {
 impl Serializer for TxOut {
     fn encode(&self, w: &mut Writer) {
         w.i64(self.value);
-        self.script.encode(w);
+        w.encode(&self.script);
     }
     fn decode(r: &mut Reader) -> Result<TxOut, errors::Error> {
-        Ok(TxOut {
-            value: r.i64()?,
-            script: r.decode()?,
-        })
-    }
-}
-
-impl IntoBytes for TxOut {
-    fn into_bytes(&self) -> Vec<u8> {
-        let mut wb = Writer::default();
-        wb.i64(self.value);
-        wb.put(self);
-        return wb.bytes().to_vec();
-    }
-}
-
-impl FromBytes for TxOut {
-    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
-        let mut r = Reader::new(bb);
-        Ok(TxOut {
-            value: r.i64()?,
-            script: r.get()?,
-        })
+        let mut i = TxOut::default();
+        i.value = r.i64()?;
+        i.script = r.decode()?;
+        Ok(i)
     }
 }
 
@@ -335,13 +216,13 @@ fn test_block() {
     s.op(crate::script::OP_02);
     let i = TxIn {
         out: Hasher::default(),
-        idx: 0,
+        idx: 0x12,
         script: s,
-        seq: 0,
+        seq: 0x34,
     };
     let mut wb = Writer::default();
-    wb.put(&i);
+    wb.encode(&i);
     let mut rb = wb.reader();
-    let o: TxIn = rb.get().unwrap();
+    let o: TxIn = rb.decode().unwrap();
     println!("{:?}", o);
 }
