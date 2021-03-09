@@ -3,9 +3,11 @@ use crate::errors;
 use bytes::Buf;
 use bytes::BufMut;
 
-///二机制生成
+/// 二机制生成
 pub trait Serializer: Sized {
+    /// 编码数据到writer
     fn encode(&self, w: &mut Writer);
+    /// 从reader读取数据
     fn decode(r: &mut Reader) -> Result<Self, errors::Error>
     where
         Self: Default;
@@ -30,7 +32,7 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    ///检测剩余字节必须>=l并返回剩余字节
+    /// 检测剩余字节必须>=l并返回剩余字节
     fn check(&self, l: usize) -> Result<usize, errors::Error> {
         let rl = self.remaining();
         if rl < l {
@@ -40,16 +42,18 @@ impl<'a> Reader<'a> {
         }
     }
     pub fn usize(&mut self) -> Result<usize, errors::Error> {
+        self.check(1)?;
         let b = self.u8()?;
         if b & 0x80 == 0 {
             return Ok(b as usize);
         }
         let b1 = b & 0x7F;
+        self.check(1)?;
         let b2 = self.u8()?;
         let size = ((b1 as usize) << 8) | (b2 as usize);
         return Ok(size);
     }
-    //剩余字节数
+    // 剩余字节数
     pub fn remaining(&self) -> usize {
         self.inner.remaining()
     }
@@ -88,11 +92,11 @@ impl<'a> Reader<'a> {
         self.check(8)?;
         Ok(self.inner.get_i64_le())
     }
-    //获取所有数据
+    // 获取所有数据
     pub fn bytes(&self) -> &[u8] {
         self.inner
     }
-    //获取指定长度的数据
+    // 获取指定长度的数据
     pub fn get_bytes(&mut self, size: usize) -> Result<Vec<u8>, errors::Error> {
         self.check(size)?;
         let mut vp: Vec<u8> = Vec::with_capacity(size);
@@ -102,7 +106,8 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(vp.as_mut());
         Ok(vp)
     }
-    ///use put放入的使用get取出
+    /// use put放入的使用get取出
+    /// 先取出数据长度,在获取数据内容
     pub fn get<T>(&mut self) -> Result<T, errors::Error>
     where
         T: FromBytes,
@@ -116,7 +121,7 @@ impl<'a> Reader<'a> {
         self.inner.copy_to_slice(vp.as_mut());
         T::from_bytes(&vp)
     }
-    ///
+    /// 从Reader中读取T类型数据,使用默认的方法创建对象返回
     pub fn decode<T>(&mut self) -> Result<T, errors::Error>
     where
         T: Serializer + Default,
@@ -154,13 +159,14 @@ impl FromBytes for Writer {
 }
 
 impl Writer {
+    // 把类型T编码写入writer
     pub fn encode<T>(&mut self, v: &T)
     where
         T: Serializer,
     {
         v.encode(self);
     }
-    //动态整数 支持0..=0x7FFF
+    // 动态整数 支持0..=0x7FFF
     pub fn usize(&mut self, size: usize) {
         if size <= 0x7F {
             self.u8(size as u8);
@@ -174,6 +180,7 @@ impl Writer {
             assert!(size <= 0x7FFF);
         }
     }
+    /// 当内容长度不固定时使用此方法放置内容长度
     pub fn put<T>(&mut self, v: &T)
     where
         T: IntoBytes,

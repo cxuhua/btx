@@ -2,7 +2,6 @@
 
 mod account;
 mod bytes;
-mod coder;
 mod consts;
 mod crypto;
 mod errors;

@@ -463,6 +463,7 @@ impl PartialEq for Script {
 //a == a
 impl Eq for Script {}
 
+///脚本编码需要知道脚本的具体长度,所以使用put get方法
 impl Serializer for Script {
     fn encode(&self, w: &mut Writer) {
         w.put(self);
