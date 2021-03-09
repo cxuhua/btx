@@ -14,7 +14,7 @@ pub fn from_timestamp(now: u32) -> DateTime<Utc> {
     DateTime::from_utc(ndt, Utc)
 }
 
-///从年月日时分秒获取
+/// 从年月日时分秒获取
 pub fn from_ymd_hms(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
     let d = NaiveDate::from_ymd(y, mo, d).and_hms(h, mi, s);
     DateTime::from_utc(d, Utc)

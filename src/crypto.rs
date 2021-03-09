@@ -142,6 +142,7 @@ fn test_pubkyeid() {
 }
 
 impl PubKey {
+    /// 将公钥再次hash用来生成账户地址
     pub fn hash(&self) -> Hasher {
         let v = self.inner.serialize();
         Hasher::hash(&v[..])

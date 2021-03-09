@@ -1,4 +1,4 @@
-use crate::bytes::{IntoBytes, FromBytes};
+use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts::{ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
 use crate::crypto::{PriKey, PubKey, SigValue};
 use crate::errors;
@@ -16,15 +16,15 @@ pub struct Account {
     less: u8,
     //仲裁公钥索引 =0xFF表示不启用
     arb: u8,
-    //所有私钥
+    //所有私钥,私钥只有在签名的时候才需要
     pris: Vec<Option<PriKey>>,
-    //对应的公钥
+    //对应的公钥,必须存在的
     pubs: Vec<Option<PubKey>>,
-    //存储的签名,有签名时存储
+    //存储的签名,有签名时存储,如果已经被对应的公钥签名时存在
     sigs: Vec<Option<SigValue>>,
 }
 
-///转为脚本数据,不包含私钥
+/// 转为脚本数据,不包含私钥
 impl IntoBytes for Account {
     fn into_bytes(&self) -> Vec<u8> {
         let mut wb = Writer::default();
@@ -49,7 +49,7 @@ impl IntoBytes for Account {
     }
 }
 
-//从脚本数据获取,不包含私钥
+/// 从脚本数据获取,不包含私钥
 impl FromBytes for Account {
     fn from_bytes(bb: &Vec<u8>) -> Result<Account, errors::Error> {
         let mut r = Reader::new(bb);
@@ -261,7 +261,7 @@ impl Account {
         }
         return Err(errors::Error::VerifySignErr);
     }
-    ///使用指定的公钥和签名验签所有签名,如果其中一个通过返回true
+    /// 使用指定的公钥和签名验签所有签名,如果其中一个通过返回true
     fn verify_with_index(
         &self,
         ipub: usize,
@@ -282,7 +282,8 @@ impl Account {
             _ => return Err(errors::Error::InvalidParam),
         }
     }
-    ///标准验签
+    /// 标准验签
+    /// msg数据为签名数据,不需要进行hash,签名时会进行一次Hasher::hash
     pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
         if !self.check_with_pubs_and_sigs() {
             return Err(errors::Error::InvalidAccount);
