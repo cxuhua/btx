@@ -71,9 +71,7 @@ impl Serializer for Hasher {
     }
     fn decode(r: &mut Reader) -> Result<Hasher, errors::Error> {
         let b = r.get_bytes(SIZE)?;
-        let mut inner = [0u8; SIZE];
-        inner.copy_from_slice(&b);
-        Ok(Hasher { inner: inner })
+        Ok(Hasher::with_bytes(&b))
     }
 }
 
@@ -118,11 +116,9 @@ impl TryFrom<&str> for Hasher {
     type Error = hex::FromHexError;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let b: Vec<u8> = Vec::from_hex(value.as_bytes())?;
-        let mut inner = [0u8; SIZE];
-        let idx = if b.len() > SIZE { 0 } else { SIZE - b.len() };
-        inner[idx..].copy_from_slice(&b);
-        inner.reverse();
-        Ok(Hasher { inner: inner })
+        let mut v = Hasher::with_bytes(&b);
+        v.inner.reverse();
+        Ok(v)
     }
 }
 
@@ -236,8 +232,14 @@ impl Hasher {
         inner.copy_from_slice(&shv);
         Hasher { inner: inner }
     }
-    pub fn with_bytes(input: [u8; SIZE]) -> Self {
+    pub fn with_array(input: [u8; SIZE]) -> Self {
         Hasher { inner: input }
+    }
+    pub fn with_bytes(b: &[u8]) -> Self {
+        let mut inner = [0u8; SIZE];
+        let idx = if b.len() > SIZE { 0 } else { SIZE - b.len() };
+        inner[idx..].copy_from_slice(&b);
+        Hasher { inner: inner }
     }
     pub fn encode_hex(&self) -> String {
         let mut mi = [0u8; SIZE];

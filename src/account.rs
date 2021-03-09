@@ -186,20 +186,12 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
-        if self.pubs.len() != self.num as usize {
+        if self.pubs_size() != self.num {
             return Err(errors::Error::InvalidPublicKey);
         }
-        for pb in self.pubs.iter() {
-            match pb {
-                Some(pb) => {
-                    //公钥的hash值作为地址生成的一部分
-                    wb.put(&pb.hash());
-                }
-                None => {
-                    //公钥必须存在的
-                    return Err(errors::Error::InvalidPublicKey);
-                }
-            }
+        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
+            let pb = iv.as_ref().unwrap();
+            wb.put(&pb.hash());
         }
         let bb = wb.bytes();
         Ok(Hasher::hash(bb))
@@ -283,7 +275,7 @@ impl Account {
         }
     }
     /// 标准验签
-    /// msg数据为签名数据,不需要进行hash,签名时会进行一次Hasher::hash
+    /// msg数据为签名数据,不需要进行hash,签名时会进行一次Hasher::hash*
     pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
         if !self.check_with_pubs_and_sigs() {
             return Err(errors::Error::InvalidAccount);

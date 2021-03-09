@@ -29,6 +29,8 @@ pub enum Error {
     StackEleTypeErr,
     //执行脚本验证失败
     ScriptVerifyErr,
+    //脚本验签失败
+    ScriptCheckSigErr,
     //读取指定数据失败
     IoBufReadErr,
 }

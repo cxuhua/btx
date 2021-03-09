@@ -1,11 +1,12 @@
+use crate::account::Account;
 use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts;
 use crate::errors;
+use crate::hasher::Hasher;
 use crate::iobuf;
 use crate::iobuf::{Reader, Serializer, Writer};
 use bytes::BufMut;
 use std::convert::{From, Into, TryFrom, TryInto};
-
 /// 放入0 - 16
 pub const OP_00: u8 = 0x00;
 pub const OP_01: u8 = 0x01;
@@ -43,24 +44,36 @@ pub const OP_DATA_2: u8 = 0xB1;
 /// 推送数据到堆栈,数据长度为4个字节
 pub const OP_DATA_4: u8 = 0xB2;
 
-///验证栈顶是否为 OP_TRUE 不是就立即结束返回并丢弃栈顶的参数
+/// 验证栈顶是否为 OP_TRUE 不是就立即结束返回并丢弃栈顶的参数
 pub const OP_VERIFY: u8 = 0xC0;
-///检测数据是否相等 类型和数据都必须相等 结果放入栈顶 top(-1) == top(-2) -> push bool,丢下使用参数
+/// 检测数据是否相等 类型和数据都必须相等 结果放入栈顶 top(-1) == top(-2) -> push bool,丢下使用参数
 pub const OP_EQUAL: u8 = 0xC1;
-///取反true <-> false
+/// 取反true <-> false
 pub const OP_NOT: u8 = 0xC2;
-///检测签名是否正确 栈顶放入签名数据,验证成功将一个bool放入栈顶
+/// 检测签名是否正确 栈顶放入签名数据,验证成功将一个bool放入栈顶
 pub const OP_CHECKSIG: u8 = 0xC3;
+/// hash账户并将hash值push到堆栈,保留账户数据
+pub const OP_HASHER: u8 = 0xC4;
+/// equal and verify true
+pub const OP_EQUAL_VERIFY: u8 = 0xC5;
+/// check sig and verify true
+pub const OP_CHECKSIG_VERIFY: u8 = 0xC6;
 
 //脚本执行器
 #[derive(Debug)]
-struct Exector {
+pub struct Exector {
     eles: Vec<Ele>,
+}
+
+/// 执行环境特性定义
+pub trait ExectorEnv: Sized {
+    /// 获取验签数据写入器
+    fn get_sign_writer(&self) -> Result<Writer, errors::Error>;
 }
 
 impl Exector {
     //获取元素数量
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.eles.len()
     }
     ///获取栈顶元素
@@ -84,7 +97,7 @@ impl Exector {
         Ok(())
     }
     ///
-    fn new() -> Exector {
+    pub fn new() -> Exector {
         Exector { eles: vec![] }
     }
     //检测栈元素数量
@@ -97,7 +110,14 @@ impl Exector {
         }
     }
     ///执行脚本
-    fn exec(&mut self, script: &Script) -> Result<usize, errors::Error> {
+    pub fn exec<E>(&mut self, script: &Script, env: &E) -> Result<usize, errors::Error>
+    where
+        E: ExectorEnv,
+    {
+        //脚本过大
+        if script.len() > consts::MAX_SCRIPT_SIZE {
+            return Err(errors::Error::ScriptFmtErr);
+        }
         let mut reader = script.reader();
         if reader.remaining() == 0 {
             return Err(errors::Error::ScriptEmptyErr);
@@ -159,14 +179,28 @@ impl Exector {
                         return Err(errors::Error::ScriptVerifyErr);
                     }
                 }
-                OP_EQUAL => {
+                OP_HASHER => {
+                    //hash top account
+                    self.check(1)?;
+                    let acc: Account = self.top(-1).try_into()?;
+                    let hv = acc.hash()?;
+                    self.eles.push(Ele::from(&hv.into_bytes()));
+                }
+                OP_EQUAL | OP_EQUAL_VERIFY => {
                     //比较栈顶的两个元素是否相等
                     self.check(2)?;
                     let l = self.top(-1);
                     let r = self.top(-2);
-                    let b = l == r;
+                    let val = l == r;
                     self.pop(2)?;
-                    self.eles.push(Ele::from(b));
+                    //如果只验证true不放入结果到堆栈
+                    if op == OP_EQUAL_VERIFY {
+                        if !val {
+                            return Err(errors::Error::ScriptVerifyErr);
+                        }
+                    } else {
+                        self.eles.push(Ele::from(val));
+                    }
                 }
                 OP_NOT => {
                     //对栈顶的bool值取反
@@ -175,8 +209,21 @@ impl Exector {
                     self.pop(1)?;
                     self.eles.push(Ele::from(!val));
                 }
-                OP_CHECKSIG => {
+                OP_CHECKSIG | OP_CHECKSIG_VERIFY => {
                     //检测签名,放置结果到栈顶并销毁参数数据
+                    self.check(1)?;
+                    let a: Account = self.top(-1).try_into()?;
+                    let w = env.get_sign_writer()?;
+                    let val = a.verify(w.bytes())?;
+                    self.pop(1)?;
+                    //如果只验证true不放入结果到堆栈
+                    if op == OP_CHECKSIG_VERIFY {
+                        if !val {
+                            return Err(errors::Error::ScriptCheckSigErr);
+                        }
+                    } else {
+                        self.eles.push(Ele::from(val));
+                    }
                 }
                 _ => {
                     return Err(errors::Error::ScriptFmtErr);
@@ -193,13 +240,24 @@ impl Exector {
     }
 }
 
+/// 测试用特性实现
+struct TestEnv;
+
+impl ExectorEnv for TestEnv {
+    fn get_sign_writer(&self) -> Result<Writer, errors::Error> {
+        let mut w = Writer::default();
+        w.put_bytes("aaa".as_bytes());
+        Ok(w)
+    }
+}
+
 #[test]
 fn test_op_not() {
     let mut script = Script::new(32);
     script.bool(false);
     script.op(OP_NOT);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 1);
     let b: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(b, true);
@@ -208,7 +266,7 @@ fn test_op_not() {
     script.bool(true);
     script.op(OP_NOT);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 1);
     let b: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(b, false);
@@ -221,7 +279,7 @@ fn test_op_equal() {
     script.i16(1);
     script.op(OP_EQUAL);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 1);
     let b: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(b, true);
@@ -231,7 +289,7 @@ fn test_op_equal() {
     script.i16(1);
     script.op(OP_EQUAL);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 1);
     let b: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(b, true);
@@ -241,7 +299,7 @@ fn test_op_equal() {
     script.string(&String::from("222"));
     script.op(OP_EQUAL);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 1);
     let b: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(b, false);
@@ -253,7 +311,7 @@ fn test_op_equal() {
     script.bool(false);
     script.op(OP_EQUAL);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 1);
     let b: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(b, true);
@@ -265,7 +323,7 @@ fn test_op_verify() {
     script.bool(true);
     script.op(OP_VERIFY);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 0);
 }
 
@@ -275,7 +333,7 @@ fn test_push_data() {
     script.data(&[1, 2, 3]);
     script.data(&[10, 20, 30]);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 2);
     let d1: &[u8] = exector.top(1).try_into().unwrap();
     assert_eq!(d1, [1, 2, 3]);
@@ -291,7 +349,7 @@ fn test_push_number() {
     script.i32(32);
     script.i64(64);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 4);
     let d1: i64 = exector.top(1).try_into().unwrap();
     let d2: i64 = exector.top(2).try_into().unwrap();
@@ -310,7 +368,7 @@ fn test_push_number_0_16() {
         script.op(v);
     }
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 17);
     for v in 1..=17 {
         let d1: i64 = exector.top(v).try_into().unwrap();
@@ -324,7 +382,7 @@ fn test_push_bool() {
     script.bool(true);
     script.bool(false);
     let mut exector = Exector::new();
-    exector.exec(&script).unwrap();
+    exector.exec(&script, &TestEnv {}).unwrap();
     assert_eq!(exector.len(), 2);
     let d1: bool = exector.top(-1).try_into().unwrap();
     assert_eq!(d1, false);
@@ -521,6 +579,26 @@ impl<'a> TryFrom<&'a Ele> for &'a [u8] {
     fn try_from(value: &'a Ele) -> Result<Self, Self::Error> {
         if let Ele::Data(pv) = value {
             return Ok(pv);
+        }
+        return Err(errors::Error::StackEleTypeErr);
+    }
+}
+
+impl TryFrom<&Ele> for Hasher {
+    type Error = errors::Error;
+    fn try_from(value: &Ele) -> Result<Self, Self::Error> {
+        if let Ele::Data(pv) = value {
+            return Hasher::from_bytes(pv);
+        }
+        return Err(errors::Error::StackEleTypeErr);
+    }
+}
+
+impl TryFrom<&Ele> for Account {
+    type Error = errors::Error;
+    fn try_from(value: &Ele) -> Result<Self, Self::Error> {
+        if let Ele::Data(pv) = value {
+            return Account::from_bytes(pv);
         }
         return Err(errors::Error::StackEleTypeErr);
     }

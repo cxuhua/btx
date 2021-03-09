@@ -1,4 +1,4 @@
-use crate::bytes::{IntoBytes, FromBytes};
+use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts::PK_HRP;
 use crate::errors;
 use crate::hasher::Hasher;

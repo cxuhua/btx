@@ -3,14 +3,14 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
 /// 获取当前时间戳
 /// 2020-01-01 00:00:00 UTC 开始至今的秒数
-pub fn timestamp() -> u32 {
-    (Utc::now().timestamp() - consts::BASE_UTC_UNIX_TIME) as u32
+pub fn timestamp() -> i64 {
+    Utc::now().timestamp() - consts::BASE_UTC_UNIX_TIME
 }
 
 /// 从时间戳获取系统时间
-pub fn from_timestamp(now: u32) -> DateTime<Utc> {
-    let unix = now as i64 + consts::BASE_UTC_UNIX_TIME;
-    let ndt = NaiveDateTime::from_timestamp(unix as i64, 0);
+pub fn from_timestamp(now: i64) -> DateTime<Utc> {
+    let unix = now + consts::BASE_UTC_UNIX_TIME;
+    let ndt = NaiveDateTime::from_timestamp(unix, 0);
     DateTime::from_utc(ndt, Utc)
 }
 
@@ -29,4 +29,21 @@ fn test_time_now() {
     let y = from_ymd_hms(2020, 01, 01, 00, 00, 30);
     let x = from_timestamp(30);
     assert_eq!(x, y);
+}
+
+#[test]
+fn test_log_use() {
+    struct Logger;
+    impl log::Log for Logger {
+        fn enabled(&self, _: &log::Metadata) -> bool {
+            false
+        }
+        fn log(&self, record: &log::Record) {
+            println!("{:?}", record);
+        }
+        fn flush(&self) {}
+    }
+    log::set_boxed_logger(Box::new(Logger)).unwrap();
+    log::set_max_level(log::LevelFilter::Trace);
+    log::info!("aaa{},{}", 111, 222);
 }
