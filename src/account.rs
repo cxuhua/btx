@@ -33,17 +33,13 @@ impl IntoBytes for Account {
         wb.u8(self.arb);
         //pubs
         wb.u8(self.pubs_size());
-        for iv in self.pubs.iter() {
-            if let Some(pb) = iv {
-                wb.put(pb);
-            }
+        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
+            wb.put(iv.as_ref().unwrap());
         }
         //sigs
         wb.u8(self.sigs_size());
-        for iv in self.sigs.iter() {
-            if let Some(sb) = iv {
-                wb.put(sb);
-            }
+        for iv in self.sigs.iter().filter(|&v| v.is_some()) {
+            wb.put(iv.as_ref().unwrap());
         }
         return wb.bytes().to_vec();
     }
@@ -63,7 +59,7 @@ impl FromBytes for Account {
         for i in 0..r.u8()? as usize {
             acc.sigs[i] = Some(r.get()?);
         }
-        if !acc.check_with_pubs_and_sigs() {
+        if !acc.check_with_pubs() {
             return Err(errors::Error::InvalidAccount);
         }
         Ok(acc)
@@ -143,16 +139,12 @@ impl Account {
         }
     }
     //从脚本获取时检测公钥和签名
-    fn check_with_pubs_and_sigs(&self) -> bool {
+    fn check_with_pubs(&self) -> bool {
         if !self.check() {
             return false;
         }
         //公钥数量检测
         if self.pubs_size() != self.num {
-            return false;
-        }
-        //不启用仲裁时最小签名数量
-        if !self.use_arb() && self.sigs_size() < self.less {
             return false;
         }
         true
@@ -177,21 +169,40 @@ impl Account {
         }
         true
     }
+    /// 不带签名和私钥的数据
+    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+        if !self.check() {
+            return Err(errors::Error::InvalidPublicKey);
+        }
+        if self.pubs_size() != self.num {
+            return Err(errors::Error::InvalidPublicKey);
+        }
+        wb.u8(self.num);
+        wb.u8(self.less);
+        wb.u8(self.arb);
+        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
+            let pb = iv.as_ref().unwrap();
+            //签名数据使用公钥内容
+            wb.put_bytes(&pb.into_bytes());
+        }
+        Ok(())
+    }
     //hash账户用于生成地址
     pub fn hash(&self) -> Result<Hasher, errors::Error> {
         if !self.check() {
+            return Err(errors::Error::InvalidPublicKey);
+        }
+        if self.pubs_size() != self.num {
             return Err(errors::Error::InvalidPublicKey);
         }
         let mut wb = iobuf::Writer::default();
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
-        if self.pubs_size() != self.num {
-            return Err(errors::Error::InvalidPublicKey);
-        }
         for iv in self.pubs.iter().filter(|&v| v.is_some()) {
             let pb = iv.as_ref().unwrap();
-            wb.put(&pb.hash());
+            //生成账号地址使用公钥hash
+            wb.put_bytes(&pb.hash().into_bytes());
         }
         let bb = wb.bytes();
         Ok(Hasher::hash(bb))
@@ -277,7 +288,15 @@ impl Account {
     /// 标准验签
     /// msg数据为签名数据,不需要进行hash,签名时会进行一次Hasher::hash*
     pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
-        if !self.check_with_pubs_and_sigs() {
+        if !self.check_with_pubs() {
+            return Err(errors::Error::InvalidAccount);
+        }
+        //不启用仲裁时最小签名数量
+        if !self.use_arb() && self.sigs_size() < self.less {
+            return Err(errors::Error::InvalidAccount);
+        }
+        //启用时只少一个签名
+        if self.use_arb() && self.sigs_size() < 1 {
             return Err(errors::Error::InvalidAccount);
         }
         //验证仲裁公钥签名

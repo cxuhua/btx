@@ -1,14 +1,12 @@
+use crate::account::Account;
+use crate::bytes::IntoBytes;
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf::{Reader, Serializer, Writer};
 use crate::script::*;
 use crate::util;
-
-/// 获取区块版本
-fn block_version(r: u16, v: u16) -> u32 {
-    (v as u32) | (r as u32) << 16
-}
+use std::convert::TryInto;
 
 ///区块定义
 #[derive(Debug)]
@@ -32,7 +30,7 @@ pub struct Block {
 impl Default for Block {
     fn default() -> Self {
         let mut block = Block {
-            ver: block_version(1, 1),
+            ver: Self::block_version(1, 1),
             prev: Hasher::default(),
             merkle: Hasher::default(),
             time: 0,
@@ -60,6 +58,10 @@ impl Clone for Block {
 }
 
 impl Block {
+    /// 获取区块版本
+    fn block_version(r: u16, v: u16) -> u32 {
+        (v as u32) | (r as u32) << 16
+    }
     /// 设置当前时间
     pub fn set_now_time(&mut self) {
         let now = util::timestamp();
@@ -69,7 +71,7 @@ impl Block {
     pub fn set_timestamp(&mut self, now: i64) {
         let r = now / consts::BASE_UTC_UNIX_TIME;
         let v = now - r * consts::BASE_UTC_UNIX_TIME;
-        self.ver = block_version(r as u16, self.get_ver());
+        self.ver = Self::block_version(r as u16, self.get_ver());
         self.time = v as u32;
     }
     /// 获取区块时间戳
@@ -84,7 +86,7 @@ impl Block {
     /// 设置区块版本
     pub fn set_version(&mut self, v: u16) {
         let r = ((self.ver >> 16) & 0xFFFF) as u16;
-        self.ver = block_version(r, v);
+        self.ver = Self::block_version(r, v);
     }
     ///追加交易元素
     pub fn append(&mut self, tx: Tx) {
@@ -113,6 +115,67 @@ fn test_block_time() {
     assert_eq!(b.get_timestamp(), 10 * consts::BASE_UTC_UNIX_TIME + 101);
 }
 
+impl Script {
+    /// 为计算id和签名写入相关数据
+    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+        match self.get_type()? {
+            SCRIPT_TYPE_CB | SCRIPT_TYPE_OUT => wb.put_bytes(self.bytes()),
+            SCRIPT_TYPE_IN => {
+                //为输入脚本获取数据创建的环境,环境方法应该不会执行
+                struct InEnv {}
+                impl ExectorEnv for InEnv {
+                    fn verify_sign(&self, _: &Ele) -> Result<bool, errors::Error> {
+                        panic!("not run here!!!");
+                    }
+                }
+                //输入脚本签名时不包含签名信息
+                let mut exector = Exector::new();
+                let ops = exector.exec(self, &InEnv {})?;
+                if ops > MAX_SCRIPT_OPS {
+                    return Err(errors::Error::ScriptFmtErr);
+                }
+                //写入op类型
+                wb.u8(OP_TYPE);
+                wb.u8(SCRIPT_TYPE_IN);
+                exector.check(1)?;
+                let ele = exector.top(-1);
+                let acc: Account = ele.try_into()?;
+                //获取不带签名的账户数据
+                acc.encode_sign(wb)?;
+            }
+            _ => return Err(errors::Error::ScriptFmtErr),
+        }
+        Ok(())
+    }
+    /// 区块高度
+    /// 自定义数据
+    pub fn new_script_cb(height: u32, data: &[u8]) -> Result<Self, errors::Error> {
+        let mut script = Script::from(SCRIPT_TYPE_CB);
+        script.u32(height);
+        script.data(data);
+        script.check()?;
+        Ok(script)
+    }
+    /// 根据账号创建标准输入脚本
+    pub fn new_script_in(acc: &Account) -> Result<Self, errors::Error> {
+        let mut script = Script::from(SCRIPT_TYPE_IN);
+        script.data(&acc.into_bytes());
+        script.check()?;
+        Ok(script)
+    }
+    /// 根据账户hash创建标准输出脚本
+    pub fn new_script_out(hasher: &Hasher) -> Result<Self, errors::Error> {
+        let mut script = Script::from(SCRIPT_TYPE_OUT);
+        script.op(OP_VERIFY_INOUT);
+        script.op(OP_HASHER);
+        script.data(&hasher.into_bytes());
+        script.op(OP_EQUAL_VERIFY);
+        script.op(OP_CHECKSIG_VERIFY);
+        script.check()?;
+        Ok(script)
+    }
+}
+
 ///交易
 #[derive(Debug)]
 pub struct Tx {
@@ -122,6 +185,72 @@ pub struct Tx {
     ins: Vec<TxIn>,
     ///输出列表
     outs: Vec<TxOut>,
+}
+
+impl Tx {
+    /// 编码签名数据
+    fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+        wb.u32(self.ver);
+        wb.u16(self.ins.len() as u16);
+        for inv in self.ins.iter() {
+            inv.encode_sign(wb)?;
+        }
+        wb.u16(self.outs.len() as u16);
+        for out in self.outs.iter() {
+            out.encode_sign(wb)?;
+        }
+        Ok(())
+    }
+    // 获取交易id
+    pub fn id(&self) -> Result<Hasher, errors::Error> {
+        let mut wb = Writer::default();
+        self.encode_sign(&mut wb)?;
+        Ok(Hasher::hash(wb.bytes()))
+    }
+}
+
+#[test]
+fn test_tx_serializer() {
+    let acc = Account::new(5, 2, false, true).unwrap();
+    let mut tx = Tx::default();
+    tx.ver = 1;
+    let mut inv = TxIn::default();
+    inv.out = Hasher::hash(&[1]);
+    inv.idx = 0;
+    inv.script = Script::new_script_in(&acc).unwrap();
+    inv.seq = 0x11223344;
+    tx.ins.push(inv);
+    let mut out = TxOut::default();
+    out.value = 0x6789;
+    out.script = Script::new_script_out(&acc.hash().unwrap()).unwrap();
+    tx.outs.push(out);
+
+    let mut wb = Writer::default();
+    wb.encode(&tx);
+
+    let mut reader = wb.reader();
+    let tx2: Tx = reader.decode().unwrap();
+
+    assert_eq!(tx, tx2);
+    assert_eq!(tx.id().unwrap(), tx2.id().unwrap());
+}
+
+#[test]
+fn test_tx_hash() {
+    let acc = Account::new(5, 2, false, true).unwrap();
+    let mut tx = Tx::default();
+    tx.ver = 1;
+    let mut inv = TxIn::default();
+    inv.out = Hasher::hash(&[1]);
+    inv.idx = 0;
+    inv.script = Script::new_script_in(&acc).unwrap();
+    inv.seq = 0x11223344;
+    tx.ins.push(inv);
+    let mut out = TxOut::default();
+    out.value = 0x6789;
+    out.script = Script::new_script_out(&acc.hash().unwrap()).unwrap();
+    tx.outs.push(out);
+    tx.id().unwrap();
 }
 
 impl Serializer for Tx {
@@ -148,6 +277,12 @@ impl Serializer for Tx {
             v.outs.push(iv);
         }
         Ok(v)
+    }
+}
+
+impl PartialEq for Tx {
+    fn eq(&self, other: &Self) -> bool {
+        self.ver == other.ver && self.ins == other.ins && self.outs == other.outs
     }
 }
 
@@ -184,6 +319,16 @@ pub struct TxIn {
     seq: u32,
 }
 
+impl TxIn {
+    fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+        wb.encode(&self.out);
+        wb.u16(self.idx);
+        self.script.encode_sign(wb)?;
+        wb.u32(self.seq);
+        Ok(())
+    }
+}
+
 impl Serializer for TxIn {
     fn encode(&self, wb: &mut Writer) {
         wb.encode(&self.out);
@@ -198,6 +343,15 @@ impl Serializer for TxIn {
         i.script = r.decode()?;
         i.seq = r.u32()?;
         Ok(i)
+    }
+}
+
+impl PartialEq for TxIn {
+    fn eq(&self, other: &Self) -> bool {
+        self.out == other.out
+            && self.script == other.script
+            && self.idx == other.idx
+            && self.seq == other.seq
     }
 }
 
@@ -230,6 +384,20 @@ pub struct TxOut {
     value: i64,
     ///输出脚本
     script: Script,
+}
+
+impl TxOut {
+    fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+        wb.i64(self.value);
+        self.script.encode_sign(wb)?;
+        Ok(())
+    }
+}
+
+impl PartialEq for TxOut {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value && self.script == other.script
+    }
 }
 
 impl Default for TxOut {
@@ -287,49 +455,33 @@ fn test_block() {
 
 #[test]
 fn test_base_inout_script() {
-    use crate::bytes::IntoBytes;
+    use crate::script::Ele;
     //定义测试执行环境
     pub struct TestEnv {}
     impl ExectorEnv for TestEnv {
-        fn get_sign_writer(&self) -> Result<Writer, errors::Error> {
-            let mut w = Writer::default();
-            w.put_bytes("aaa".as_bytes());
-            Ok(w)
+        fn verify_sign(&self, ele: &Ele) -> Result<bool, errors::Error> {
+            let acc: Account = ele.try_into()?;
+            acc.verify("aaa".as_bytes())
         }
     }
     let env = &TestEnv {};
-    use crate::account::Account;
     let mut acc = Account::new(5, 2, false, true).unwrap();
     acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
     acc.sign_with_index(1, "aaa".as_bytes()).unwrap();
-    //input script
-    let mut is = Script::default();
-    //push account data
-    //-1
-    is.data(&acc.into_bytes());
-    // println!("{:x?}", is);
+    //创建输入脚本
+    //-1 设置脚本类型
+    let mut is = Script::new_script_in(&acc).unwrap();
+    assert_eq!(SCRIPT_TYPE_IN, is.get_type().unwrap());
 
-    //out script
-    let mut os = Script::default();
-    //hash input script account
-    //-2
-    os.op(OP_HASHER);
-    //push real hash data
-    //-3
-    os.data(&acc.hash().unwrap().into_bytes());
-    //检测hash是否一致
-    //-4
-    os.op(OP_EQUAL_VERIFY);
-    //检测签名
-    //-5
-    os.op(OP_CHECKSIG_VERIFY);
-    // println!("{:x?}", os);
-    //链接输出脚本
+    let os = Script::new_script_out(&acc.hash().unwrap()).unwrap();
+    assert_eq!(SCRIPT_TYPE_OUT, os.get_type().unwrap());
+
     is.concat(&os);
 
-    //println!("{:x?}", is);
+    let ops = is.ops().unwrap();
+    assert_eq!(8, ops);
 
     let mut exector = Exector::new();
     let size = exector.exec(&is, env).unwrap();
-    assert_eq!(5, size);
+    assert_eq!(ops, size);
 }

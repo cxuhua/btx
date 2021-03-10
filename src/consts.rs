@@ -2,10 +2,6 @@
 pub const PK_HRP: &str = "pk";
 /// 地址前缀
 pub const ADDR_HRP: &str = "btx";
-/// 脚本最大长度
-pub const MAX_SCRIPT_SIZE: usize = 4096;
-/// 脚本最大ops数量
-pub const MAX_SCRIPT_OPS: usize = 256;
 /// 一个coin的缩放比例
 pub const COIN: i64 = 1000000;
 /// 最大金额

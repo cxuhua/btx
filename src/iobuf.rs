@@ -64,6 +64,22 @@ impl<'a> Reader<'a> {
         self.check(1)?;
         Ok(self.inner.get_u8())
     }
+    /// 推进读取位置cnt长度
+    pub fn advance(&mut self, cnt: usize) -> Result<(), errors::Error> {
+        self.check(cnt)?;
+        self.inner.advance(cnt);
+        Ok(())
+    }
+    //动态获取根据size确定字节长度
+    pub fn length(&mut self, size: usize) -> Result<usize, errors::Error> {
+        self.check(size)?;
+        match size {
+            1 => Ok(self.u8()? as usize),
+            2 => Ok(self.u16()? as usize),
+            3 => Ok(self.u32()? as usize),
+            _ => Err(errors::Error::IoBufReadErr),
+        }
+    }
     pub fn u16(&mut self) -> Result<u16, errors::Error> {
         self.check(2)?;
         Ok(self.inner.get_u16_le())
@@ -205,8 +221,11 @@ impl Writer {
             inner: &self.inner[..],
         }
     }
+    pub fn put_writer(&mut self, b: &Writer) {
+        self.put_bytes(b.bytes());
+    }
     pub fn put_bytes(&mut self, b: &[u8]) {
-        self.inner.put(b)
+        self.inner.put(b);
     }
     pub fn u8(&mut self, v: u8) {
         self.inner.put_u8(v);

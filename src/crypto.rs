@@ -28,6 +28,12 @@ pub struct SigValue {
     inner: Signature,
 }
 
+impl Clone for SigValue {
+    fn clone(&self) -> Self {
+        SigValue { inner: self.inner }
+    }
+}
+
 impl str::FromStr for SigValue {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -71,6 +77,12 @@ impl IntoBytes for SigValue {
 #[derive(Debug)]
 pub struct PubKey {
     inner: PublicKey,
+}
+
+impl Clone for PubKey {
+    fn clone(&self) -> Self {
+        PubKey { inner: self.inner }
+    }
 }
 
 impl str::FromStr for PubKey {
@@ -152,6 +164,12 @@ impl PubKey {
 #[derive(Debug)]
 pub struct PriKey {
     inner: SecretKey,
+}
+
+impl Clone for PriKey {
+    fn clone(&self) -> Self {
+        PriKey { inner: self.inner }
+    }
 }
 
 impl PriKey {

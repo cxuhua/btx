@@ -18,9 +18,11 @@ impl MerkleTree {
         w.put_bytes(h2.to_bytes());
         Hasher::hash(w.bytes())
     }
+    //根据高度获取宽度
     fn tree_width(&self, h: usize) -> usize {
         (self.trans + (1 << h) - 1) >> h
     }
+    //获取高度
     fn tree_height(&self) -> usize {
         let mut height = 0;
         while self.tree_width(height) > 1 {
@@ -28,6 +30,7 @@ impl MerkleTree {
         }
         height
     }
+    //结算某个高度指定位置的hash
     fn calc_hasher(
         &mut self,
         height: usize,

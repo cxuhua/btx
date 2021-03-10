@@ -1,6 +1,5 @@
 use crate::account::Account;
 use crate::bytes::{FromBytes, IntoBytes};
-use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf;
@@ -42,7 +41,8 @@ pub const OP_DATA_1: u8 = 0xB0;
 pub const OP_DATA_2: u8 = 0xB1;
 /// 推送数据到堆栈,数据长度为4个字节
 pub const OP_DATA_4: u8 = 0xB2;
-
+/// 定义脚本类型,一般放置在脚本最前面
+pub const OP_TYPE: u8 = 0xFF;
 /// 验证栈顶是否为 OP_TRUE 不是就立即结束返回并丢弃栈顶的参数
 pub const OP_VERIFY: u8 = 0xC0;
 /// 检测数据是否相等 类型和数据都必须相等 结果放入栈顶 top(-1) == top(-2) -> push bool,丢下使用参数
@@ -57,20 +57,45 @@ pub const OP_HASHER: u8 = 0xC4;
 pub const OP_EQUAL_VERIFY: u8 = 0xC5;
 /// check sig and verify true
 pub const OP_CHECKSIG_VERIFY: u8 = 0xC6;
+/// 检测是否是IN_OUT脚本: 输入 + 输出
+pub const OP_VERIFY_INOUT: u8 = 0xC7;
+
+/// coinbase脚本类型
+pub const SCRIPT_TYPE_CB: u8 = 0x1;
+/// 最大coinbase脚本长度
+pub const MAX_SCRIPT_CB_SIZE: usize = 128;
+/// 输入脚本
+pub const SCRIPT_TYPE_IN: u8 = 0x2;
+/// 最大输入脚本长度
+pub const MAX_SCRIPT_IN_SIZE: usize = 2048;
+/// 锁定输出脚本
+pub const SCRIPT_TYPE_OUT: u8 = 0x3;
+/// 最大输出脚本长度
+pub const MAX_SCRIPT_OUT_SIZE: usize = 2048;
+/// 脚本最大长度
+pub const MAX_SCRIPT_SIZE: usize = 4096;
+/// 脚本最大ops数量
+pub const MAX_SCRIPT_OPS: usize = 256;
 
 //脚本执行器
 #[derive(Debug)]
 pub struct Exector {
     eles: Vec<Ele>,
+    typs: Vec<u8>,
 }
 
 /// 执行环境特性定义
 pub trait ExectorEnv: Sized {
-    /// 获取验签数据写入器
-    fn get_sign_writer(&self) -> Result<Writer, errors::Error>;
+    /// OP_CHECKSIG OP_CHECKSIG_VERIFY 验签使用
+    /// ele: 堆栈顶部元素(account数据类型)
+    fn verify_sign(&self, ele: &Ele) -> Result<bool, errors::Error>;
 }
 
 impl Exector {
+    //获取类型
+    pub fn get_type(&self) -> &[u8] {
+        &self.typs
+    }
     //获取元素数量
     pub fn len(&self) -> usize {
         self.eles.len()
@@ -79,7 +104,7 @@ impl Exector {
     /// s3  -1 +3
     /// s2  -2 +2
     /// s1  -3 +1
-    fn top(&self, n: isize) -> &Ele {
+    pub fn top(&self, n: isize) -> &Ele {
         let l = self.len() as isize;
         if n < 0 {
             &self.eles[(l + n) as usize]
@@ -97,10 +122,13 @@ impl Exector {
     }
     ///
     pub fn new() -> Exector {
-        Exector { eles: vec![] }
+        Exector {
+            eles: vec![],
+            typs: vec![],
+        }
     }
-    //检测栈元素数量
-    fn check(&self, l: usize) -> Result<usize, errors::Error> {
+    //检测栈元素数量至少为l个
+    pub fn check(&self, l: usize) -> Result<usize, errors::Error> {
         let rl = self.len();
         if rl < l {
             Err(errors::Error::StackLenErr)
@@ -111,7 +139,7 @@ impl Exector {
     ///执行脚本
     pub fn exec(&mut self, script: &Script, env: &impl ExectorEnv) -> Result<usize, errors::Error> {
         //脚本过大
-        if script.len() > consts::MAX_SCRIPT_SIZE {
+        if script.len() > MAX_SCRIPT_SIZE {
             return Err(errors::Error::ScriptFmtErr);
         }
         let mut reader = script.reader();
@@ -123,6 +151,10 @@ impl Exector {
             step += 1;
             let op = reader.u8()?;
             match op {
+                OP_TYPE => {
+                    let typ = reader.u8()?;
+                    self.typs.push(typ);
+                }
                 OP_TRUE | OP_FALSE => {
                     self.eles.push(Ele::from(op == OP_TRUE));
                 }
@@ -208,9 +240,8 @@ impl Exector {
                 OP_CHECKSIG | OP_CHECKSIG_VERIFY => {
                     //检测签名,放置结果到栈顶并销毁参数数据
                     self.check(1)?;
-                    let a: Account = self.top(-1).try_into()?;
-                    let w = env.get_sign_writer()?;
-                    let val = a.verify(w.bytes())?;
+                    let ele = self.top(-1);
+                    let val = env.verify_sign(ele)?;
                     self.pop(1)?;
                     //如果只验证true不放入结果到堆栈
                     if op == OP_CHECKSIG_VERIFY {
@@ -221,11 +252,20 @@ impl Exector {
                         self.eles.push(Ele::from(val));
                     }
                 }
+                OP_VERIFY_INOUT => {
+                    //检测是否为输入+输出脚本
+                    if self.typs.len() != 2 {
+                        return Err(errors::Error::ScriptExeErr);
+                    }
+                    if self.typs != [SCRIPT_TYPE_IN, SCRIPT_TYPE_OUT] {
+                        return Err(errors::Error::ScriptExeErr);
+                    }
+                }
                 _ => {
                     return Err(errors::Error::ScriptFmtErr);
                 }
             }
-            if step > consts::MAX_SCRIPT_OPS {
+            if step > MAX_SCRIPT_OPS {
                 return Err(errors::Error::ScriptFmtErr);
             }
             if reader.remaining() == 0 {
@@ -240,11 +280,28 @@ impl Exector {
 struct TestEnv;
 
 impl ExectorEnv for TestEnv {
-    fn get_sign_writer(&self) -> Result<Writer, errors::Error> {
-        let mut w = Writer::default();
-        w.put_bytes("aaa".as_bytes());
-        Ok(w)
+    fn verify_sign(&self, ele: &Ele) -> Result<bool, errors::Error> {
+        let a: Account = ele.try_into()?;
+        a.verify("aaa".as_bytes())
     }
+}
+
+#[test]
+fn test_script_get_type() {
+    let mut script = Script::new(32);
+    script.set_type(SCRIPT_TYPE_CB);
+    let typ = script.get_type().unwrap();
+    assert_eq!(typ, SCRIPT_TYPE_CB);
+}
+
+#[test]
+fn test_script_type() {
+    let mut script = Script::new(32);
+    script.set_type(SCRIPT_TYPE_IN);
+    let mut exector = Exector::new();
+    exector.exec(&script, &TestEnv {}).unwrap();
+    assert_eq!(exector.len(), 0);
+    assert_eq!(exector.get_type(), [SCRIPT_TYPE_IN]);
 }
 
 #[test]
@@ -424,6 +481,81 @@ impl Default for Script {
 }
 
 impl Script {
+    ///获取脚本op数量
+    pub fn ops(&self) -> Result<usize, errors::Error> {
+        //脚本过大
+        if self.len() > MAX_SCRIPT_SIZE {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        let mut reader = self.reader();
+        if reader.remaining() == 0 {
+            return Err(errors::Error::ScriptEmptyErr);
+        }
+        let mut ops = 0;
+        loop {
+            ops += 1;
+            let op = reader.u8()?;
+            match op {
+                OP_TYPE => {
+                    reader.advance(1)?;
+                }
+                OP_NUMBER_1..=OP_NUMBER_8 => {
+                    let p = op - OP_NUMBER_1;
+                    let l = (1 << p) as usize;
+                    reader.advance(l)?;
+                }
+                OP_DATA_1..=OP_DATA_4 => {
+                    let n = (op - OP_DATA_1 + 1) as usize;
+                    let l = reader.length(n)?;
+                    reader.advance(l)?;
+                }
+                _ => {
+                    //这里应该都是指令,否则需要跳过指令相关的数据
+                }
+            }
+            if ops > MAX_SCRIPT_OPS {
+                return Err(errors::Error::ScriptFmtErr);
+            }
+            if reader.remaining() == 0 {
+                break;
+            }
+        }
+        Ok(ops)
+    }
+    ///检测脚本数据
+    pub fn check(&self) -> Result<(), errors::Error> {
+        if self.len() > MAX_SCRIPT_SIZE {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        if self.ops()? > MAX_SCRIPT_OPS {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        match self.get_type()? {
+            SCRIPT_TYPE_CB => {
+                if self.len() > MAX_SCRIPT_CB_SIZE {
+                    return Err(errors::Error::ScriptFmtErr);
+                }
+            }
+            SCRIPT_TYPE_IN => {
+                if self.len() > MAX_SCRIPT_IN_SIZE {
+                    return Err(errors::Error::ScriptFmtErr);
+                }
+            }
+            SCRIPT_TYPE_OUT => {
+                if self.len() > MAX_SCRIPT_OUT_SIZE {
+                    return Err(errors::Error::ScriptFmtErr);
+                }
+            }
+            _ => return Err(errors::Error::ScriptFmtErr),
+        }
+        Ok(())
+    }
+    //带类型创建脚本
+    pub fn from(typ: u8) -> Self {
+        let mut script = Self::default();
+        script.set_type(typ);
+        script
+    }
     //获取脚本长度
     pub fn len(&self) -> usize {
         self.writer.len()
@@ -433,8 +565,19 @@ impl Script {
         self.writer.reader()
     }
     ///获取脚本内容
-    pub fn to_bytes(&self) -> &[u8] {
+    pub fn bytes(&self) -> &[u8] {
         return self.writer.bytes();
+    }
+    /// 获取脚本类型
+    pub fn get_type(&self) -> Result<u8, errors::Error> {
+        let b = self.writer.bytes();
+        if b.len() < 2 {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        if b[0] != OP_TYPE {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        Ok(b[1])
     }
     ///创建脚本对象
     pub fn new(cap: usize) -> Self {
@@ -445,6 +588,12 @@ impl Script {
     ///链接另外一个脚本
     pub fn concat(&mut self, script: &Script) -> &mut Self {
         self.writer.put_bytes(script.writer.bytes());
+        return self;
+    }
+    ///设置脚本类型
+    pub fn set_type(&mut self, typ: u8) -> &mut Self {
+        self.op(OP_TYPE);
+        self.writer.u8(typ);
         return self;
     }
     ///push bool
@@ -500,6 +649,12 @@ impl Script {
         return self;
     }
     ///push number
+    pub fn u32(&mut self, v: u32) -> &mut Self {
+        self.op(OP_NUMBER_4);
+        self.writer.u32(v);
+        return self;
+    }
+    ///push number
     pub fn i64(&mut self, v: i64) -> &mut Self {
         self.op(OP_NUMBER_8);
         self.writer.i64(v);
@@ -544,7 +699,7 @@ impl FromBytes for Script {
 
 ///栈元素
 #[derive(Debug)]
-enum Ele {
+pub enum Ele {
     Bool(bool),
     Number(i64),
     Data(Vec<u8>),
