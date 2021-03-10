@@ -9,7 +9,7 @@ pub const SIZE: usize = 32;
 use num_bigint::BigUint;
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::ops::{Div, Mul};
 
 #[test]
@@ -47,6 +47,7 @@ fn test_pow() {
 }
 #[test]
 fn test_compute_bits() {
+    use std::convert::TryInto;
     let limit =
         Hasher::try_from("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
             .unwrap();
@@ -150,6 +151,10 @@ impl From<&Hasher> for BigUint {
 }
 
 impl Hasher {
+    ///空hash
+    pub fn zero() -> Self {
+        return Hasher { inner: [0u8; SIZE] };
+    }
     ///计算下个工作难度
     /// self: 最小工作难度
     /// stime : 时间间隔 默认:14 * 24 * 60 * 60 = 1209600 每14天2016个的速度

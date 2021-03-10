@@ -33,4 +33,6 @@ pub enum Error {
     ScriptCheckSigErr,
     //读取指定数据失败
     IoBufReadErr,
+    //默克尔树错误
+    BadMerkleTree,
 }

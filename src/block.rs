@@ -1,4 +1,3 @@
-use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
@@ -70,7 +69,7 @@ impl Block {
     pub fn set_timestamp(&mut self, now: i64) {
         let r = now / consts::BASE_UTC_UNIX_TIME;
         let v = now - r * consts::BASE_UTC_UNIX_TIME;
-        self.ver = block_version(r as u16, self.get_version());
+        self.ver = block_version(r as u16, self.get_ver());
         self.time = v as u32;
     }
     /// 获取区块时间戳
@@ -79,7 +78,7 @@ impl Block {
         r * consts::BASE_UTC_UNIX_TIME + self.time as i64
     }
     /// 获取版本
-    pub fn get_version(&self) -> u16 {
+    pub fn get_ver(&self) -> u16 {
         (self.ver & 0xFFFF) as u16
     }
     /// 设置区块版本
@@ -110,7 +109,7 @@ fn test_block_time() {
     assert_eq!(b.ver, (10 << 16) | 12);
     assert_eq!(b.time, 101);
 
-    assert_eq!(b.get_version(), 12);
+    assert_eq!(b.get_ver(), 12);
     assert_eq!(b.get_timestamp(), 10 * consts::BASE_UTC_UNIX_TIME + 101);
 }
 
@@ -288,16 +287,17 @@ fn test_block() {
 
 #[test]
 fn test_base_inout_script() {
+    use crate::bytes::IntoBytes;
     //定义测试执行环境
-    pub struct TxExectorEnv {}
-    impl ExectorEnv for TxExectorEnv {
+    pub struct TestEnv {}
+    impl ExectorEnv for TestEnv {
         fn get_sign_writer(&self) -> Result<Writer, errors::Error> {
             let mut w = Writer::default();
             w.put_bytes("aaa".as_bytes());
             Ok(w)
         }
     }
-    let env = TxExectorEnv {};
+    let env = &TestEnv {};
     use crate::account::Account;
     let mut acc = Account::new(5, 2, false, true).unwrap();
     acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
@@ -330,6 +330,6 @@ fn test_base_inout_script() {
     //println!("{:x?}", is);
 
     let mut exector = Exector::new();
-    let size = exector.exec(&is, &env).unwrap();
+    let size = exector.exec(&is, env).unwrap();
     assert_eq!(5, size);
 }

@@ -5,8 +5,7 @@ use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf;
 use crate::iobuf::{Reader, Serializer, Writer};
-use bytes::BufMut;
-use std::convert::{From, Into, TryFrom, TryInto};
+use std::convert::{From, TryFrom, TryInto};
 /// 放入0 - 16
 pub const OP_00: u8 = 0x00;
 pub const OP_01: u8 = 0x01;
@@ -110,10 +109,7 @@ impl Exector {
         }
     }
     ///执行脚本
-    pub fn exec<E>(&mut self, script: &Script, env: &E) -> Result<usize, errors::Error>
-    where
-        E: ExectorEnv,
-    {
+    pub fn exec(&mut self, script: &Script, env: &impl ExectorEnv) -> Result<usize, errors::Error> {
         //脚本过大
         if script.len() > consts::MAX_SCRIPT_SIZE {
             return Err(errors::Error::ScriptFmtErr);
