@@ -225,7 +225,7 @@ impl Writer {
         self.put_bytes(b.bytes());
     }
     pub fn put_bytes(&mut self, b: &[u8]) {
-        self.inner.put(b);
+        self.inner.put_slice(b);
     }
     pub fn u8(&mut self, v: u8) {
         self.inner.put_u8(v);

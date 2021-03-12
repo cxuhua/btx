@@ -1,10 +1,32 @@
-use crate::block::{Block, Tx};
-use crate::errors::Error;
-use crate::iobuf::Serializer;
+use crate::block::Block;
+use crate::hasher::Hasher;
+use bytes::BufMut;
 use core::hash;
+use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
+use std::sync::Arc;
+use std::sync::Mutex;
 
+#[derive(PartialEq, Eq)]
 pub struct IKey(Vec<u8>);
+
+/// 按高度查询区块
+impl From<u32> for IKey {
+    fn from(v: u32) -> Self {
+        let mut key = IKey(vec![]);
+        key.0.put_u32_le(v);
+        key
+    }
+}
+
+/// 按hash查询
+impl From<&Hasher> for IKey {
+    fn from(v: &Hasher) -> Self {
+        let mut key = IKey(vec![]);
+        key.0.put_slice(v.as_bytes());
+        key
+    }
+}
 
 impl hash::Hash for IKey {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
@@ -12,43 +34,23 @@ impl hash::Hash for IKey {
     }
 }
 
-impl PartialEq for IKey {
-    fn eq(&self, other: &IKey) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Eq for IKey {}
-
-#[derive(Debug)]
-pub enum IValue {
-    Block(Block), //存放区块数据
-    Tx(Tx),       //存放交易数据
-}
-
-impl IValue {
-    /// 作为区块返回
-    fn as_block(&self) -> Result<&Block, Error> {
-        match self {
-            IValue::Block(blk) => Ok(&blk),
-            _ => Error::msg("not found Block"),
-        }
-    }
-    /// 作为交易返回
-    fn as_tx(&self) -> Result<&Tx, Error> {
-        match self {
-            IValue::Tx(tx) => Ok(&tx),
-            _ => Error::msg("not found Tx"),
-        }
+impl IKey {
+    /// 连接字节到key
+    pub fn concat(&mut self, v: &[u8]) -> &mut Self {
+        self.0.put_slice(v);
+        self
     }
 }
 
 /// 区块链存储索引
+/// 优先从缓存获取,失败从数据库获取
 pub trait Indexer: Sized {
-    /// 根据k获取数据
-    fn get(&mut self, _k: &IKey) -> Result<IValue, Error> {
-        Error::msg("NotImpErr")
-    }
+    /// 根据k获取区块
+    fn get<K>(&self, _k: K) -> Option<Arc<Block>>
+    where
+        K: Into<IKey>;
+    /// 获取区块缓存器
+    fn cache(&self) -> Option<&BlkCache>;
 }
 
 /// 数据文件分布说明
@@ -57,10 +59,130 @@ pub trait Indexer: Sized {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 
+/// lru线程安全的区块缓存实现
+pub struct BlkCache {
+    lru: Mutex<LruCache<IKey, Arc<Block>>>,
+}
+
+impl Default for BlkCache {
+    fn default() -> Self {
+        BlkCache::new(1024 * 10)
+    }
+}
+
+impl BlkCache {
+    /// 创建指定大小的lur缓存
+    pub fn new(cap: usize) -> Self {
+        BlkCache {
+            lru: Mutex::new(LruCache::new(cap)),
+        }
+    }
+    /// 获取缓存长度
+    pub fn len(&self) -> usize {
+        match self.lru.lock() {
+            Ok(w) => w.len(),
+            _ => 0,
+        }
+    }
+    /// 加入缓存值
+    /// 如果存在将返回旧值
+    pub fn put<K>(&self, k: K, v: Block) -> Option<Arc<Block>>
+    where
+        K: Into<IKey>,
+    {
+        match self.lru.lock() {
+            Ok(mut w) => w.put(k.into(), Arc::new(v)),
+            _ => None,
+        }
+    }
+    /// 从缓存获取值,不改变缓存状态
+    pub fn peek<K, F>(&self, k: K) -> Option<Arc<Block>>
+    where
+        K: Into<IKey>,
+    {
+        match self.lru.lock() {
+            Ok(w) => match w.peek(&k.into()) {
+                Some(v) => Some(v.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// 检测指定的key是否存在
+    pub fn has<K>(&self, k: K) -> bool
+    where
+        K: Into<IKey>,
+    {
+        match self.lru.lock() {
+            Ok(w) => w.contains(&k.into()),
+            _ => false,
+        }
+    }
+
+    /// 从缓存移除数据
+    pub fn pop<K>(&self, k: K) -> Option<Arc<Block>>
+    where
+        K: Into<IKey>,
+    {
+        match self.lru.lock() {
+            Ok(mut w) => w.pop(&k.into()),
+            _ => None,
+        }
+    }
+
+    /// 从缓存获取值并复制返回
+    /// 复制对应的值返回
+    pub fn get<K>(&self, k: K) -> Option<Arc<Block>>
+    where
+        K: Into<IKey>,
+    {
+        match self.lru.lock() {
+            Ok(mut w) => match w.get(&k.into()) {
+                Some(v) => Some(v.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 #[test]
-fn test_index() {
-    struct A {}
-    impl Indexer for A {}
-    use lru::LruCache;
-    let mut c: LruCache<IKey, IValue> = LruCache::new(100);
+fn test_lru_write() {
+    let c = BlkCache::default();
+    let blk = Block::default();
+    c.put(1u32, blk);
+    let v = c.get(1u32).unwrap();
+    let ver = v.get_ver();
+    assert_eq!(ver, 1);
+}
+
+#[test]
+fn test_lru_cache() {
+    let c = BlkCache::default();
+    let blk = Block::default();
+    c.put(1u32, blk);
+    let v = c.get(1u32).unwrap();
+    assert_eq!(v.as_ref(), &Block::default());
+    assert_eq!(1, c.len());
+    let v = c.pop(1u32).unwrap();
+    assert_eq!(v.as_ref(), &Block::default());
+    assert_eq!(0, c.len());
+}
+
+#[test]
+fn test_lru_thread() {
+    use std::sync::Arc;
+    use std::{thread, time};
+    let c = Arc::new(BlkCache::default());
+    for _ in 0..10 {
+        let c1 = c.clone();
+        thread::spawn(move || {
+            c1.put(1u32, Block::default());
+            let v = c1.get(1u32).unwrap();
+            assert_eq!(v.as_ref(), &Block::default());
+            assert_eq!(1, c1.len());
+        });
+    }
+    thread::sleep(time::Duration::from_secs(1));
 }

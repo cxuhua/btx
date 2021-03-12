@@ -36,6 +36,18 @@ pub struct Block {
     txs: Vec<Tx>,
 }
 
+impl PartialEq for Block {
+    fn eq(&self, other: &Block) -> bool {
+        self.ver == other.ver
+            && self.prev == other.prev
+            && self.merkle == other.merkle
+            && self.time == other.time
+            && self.bits == other.bits
+            && self.nonce == other.nonce
+            && self.txs.len() == other.txs.len()
+    }
+}
+
 impl Checker for Block {
     fn check_value(&self) -> Result<(), errors::Error> {
         for iv in self.txs.iter() {
@@ -165,7 +177,7 @@ impl Block {
         (self.ver & 0xFFFF) as u16
     }
     /// 设置区块版本
-    pub fn set_version(&mut self, v: u16) {
+    pub fn set_ver(&mut self, v: u16) {
         let r = ((self.ver >> 16) & 0xFFFF) as u16;
         self.ver = Self::block_version(r, v);
     }
@@ -183,12 +195,12 @@ fn test_block_time() {
     assert_eq!(b.time, 100);
 
     b.set_timestamp(101);
-    b.set_version(10);
+    b.set_ver(10);
     assert_eq!(b.ver, 10);
     assert_eq!(b.time, 101);
 
     b.set_timestamp(10 * consts::BASE_UTC_UNIX_TIME + 101);
-    b.set_version(12);
+    b.set_ver(12);
     assert_eq!(b.ver, (10 << 16) | 12);
     assert_eq!(b.time, 101);
 
