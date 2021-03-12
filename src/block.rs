@@ -1,12 +1,21 @@
 use crate::account::Account;
-use crate::bytes::IntoBytes;
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf::{Reader, Serializer, Writer};
+use crate::merkle::MerkleTree;
 use crate::script::*;
 use crate::util;
 use std::convert::TryInto;
+
+/// 区块中最大交易数量
+const MAX_TX_COUNT: u16 = 0xFFFF;
+
+/// 数据检测特性
+pub trait Checker: Sized {
+    /// 检测值,收到区块或者完成区块时检测区块合法性
+    fn check_value(&self) -> Result<(), errors::Error>;
+}
 
 ///区块定义
 #[derive(Debug)]
@@ -25,6 +34,15 @@ pub struct Block {
     nonce: u32,
     ///交易列表
     txs: Vec<Tx>,
+}
+
+impl Checker for Block {
+    fn check_value(&self) -> Result<(), errors::Error> {
+        for iv in self.txs.iter() {
+            iv.check_value()?
+        }
+        Ok(())
+    }
 }
 
 impl Default for Block {
@@ -57,7 +75,70 @@ impl Clone for Block {
     }
 }
 
+impl Serializer for Block {
+    fn encode(&self, wb: &mut Writer) {
+        self.encode_header(wb);
+        //交易数量
+        wb.u16(self.txs.len() as u16);
+        for tx in self.txs.iter() {
+            tx.encode(wb);
+        }
+    }
+    fn decode(r: &mut Reader) -> Result<Block, errors::Error> {
+        let mut blk = Block::default();
+        blk.decode_header(r)?;
+        //读取交易数量
+        for _ in 0..r.u16()? {
+            let tx: Tx = r.decode()?;
+            blk.txs.push(tx);
+        }
+        Ok(blk)
+    }
+}
+
 impl Block {
+    /// 按索引获取交易
+    pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
+        if idx >= self.txs.len() {
+            return Err(errors::Error::NotFoundTx);
+        }
+        Ok(&self.txs[idx])
+    }
+    /// 解码头部
+    fn decode_header(&mut self, r: &mut Reader) -> Result<(), errors::Error> {
+        self.ver = r.u32()?;
+        self.prev = r.decode()?;
+        self.merkle = r.decode()?;
+        self.time = r.u32()?;
+        self.bits = r.u32()?;
+        self.nonce = r.u32()?;
+        Ok(())
+    }
+    /// 编码区块头部
+    fn encode_header(&self, wb: &mut Writer) {
+        wb.u32(self.ver);
+        wb.encode(&self.prev);
+        wb.encode(&self.merkle);
+        wb.u32(self.time);
+        wb.u32(self.bits);
+        wb.u32(self.nonce);
+    }
+    /// 计算区块id
+    pub fn id(&self) -> Result<Hasher, errors::Error> {
+        let mut wb = Writer::default();
+        self.encode_header(&mut wb);
+        Ok(Hasher::hash(&wb.bytes()))
+    }
+    /// 计算merkle值
+    pub fn compute_merkle(&self) -> Result<Hasher, errors::Error> {
+        let mut ids = vec![];
+        for iv in self.txs.iter() {
+            let id = iv.id()?;
+            ids.push(id);
+        }
+        let root = MerkleTree::compute(&ids)?;
+        Ok(root)
+    }
     /// 获取区块版本
     fn block_version(r: u16, v: u16) -> u32 {
         (v as u32) | (r as u32) << 16
@@ -121,6 +202,8 @@ impl Script {
         match self.get_type()? {
             SCRIPT_TYPE_CB | SCRIPT_TYPE_OUT => wb.put_bytes(self.bytes()),
             SCRIPT_TYPE_IN => {
+                //写入op类型
+                wb.put_bytes(&[OP_TYPE, SCRIPT_TYPE_IN]);
                 //为输入脚本获取数据创建的环境,环境方法应该不会执行
                 struct InEnv {}
                 impl ExectorEnv for InEnv {
@@ -134,13 +217,10 @@ impl Script {
                 if ops > MAX_SCRIPT_OPS {
                     return Err(errors::Error::ScriptFmtErr);
                 }
-                //写入op类型
-                wb.u8(OP_TYPE);
-                wb.u8(SCRIPT_TYPE_IN);
                 exector.check(1)?;
                 let ele = exector.top(-1);
                 let acc: Account = ele.try_into()?;
-                //获取不带签名的账户数据
+                //为签名编码账户数据
                 acc.encode_sign(wb)?;
             }
             _ => return Err(errors::Error::ScriptFmtErr),
@@ -159,7 +239,7 @@ impl Script {
     /// 根据账号创建标准输入脚本
     pub fn new_script_in(acc: &Account) -> Result<Self, errors::Error> {
         let mut script = Script::from(SCRIPT_TYPE_IN);
-        script.data(&acc.into_bytes());
+        script.put(acc);
         script.check()?;
         Ok(script)
     }
@@ -168,7 +248,7 @@ impl Script {
         let mut script = Script::from(SCRIPT_TYPE_OUT);
         script.op(OP_VERIFY_INOUT);
         script.op(OP_HASHER);
-        script.data(&hasher.into_bytes());
+        script.put(hasher);
         script.op(OP_EQUAL_VERIFY);
         script.op(OP_CHECKSIG_VERIFY);
         script.check()?;
@@ -187,7 +267,32 @@ pub struct Tx {
     outs: Vec<TxOut>,
 }
 
+impl Checker for Tx {
+    fn check_value(&self) -> Result<(), errors::Error> {
+        //coinbase只能有一个输入
+        if self.is_coinbase() && self.ins.len() != 1 {
+            return Err(errors::Error::InvalidTx);
+        }
+        //输出不能为空
+        if self.outs.len() == 0 {
+            return Err(errors::Error::InvalidTx);
+        }
+        for iv in self.ins.iter() {
+            iv.check_value()?;
+        }
+        for iv in self.outs.iter() {
+            iv.check_value()?
+        }
+        Ok(())
+    }
+}
+
 impl Tx {
+    /// 检测交易是否是coinbase交易
+    /// 只有一个输入,并且out不指向任何一个hash
+    pub fn is_coinbase(&self) -> bool {
+        self.ins.len() > 0 && self.ins[0].is_coinbase()
+    }
     /// 编码签名数据
     fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
         wb.u32(self.ver);
@@ -319,7 +424,26 @@ pub struct TxIn {
     seq: u32,
 }
 
+impl Checker for TxIn {
+    fn check_value(&self) -> Result<(), errors::Error> {
+        //检测脚本类型,输入必须输入或者cb脚本
+        let typ = self.script.get_type()?;
+        if self.is_coinbase() {
+            if typ != SCRIPT_TYPE_CB {
+                return Err(errors::Error::ScriptFmtErr);
+            }
+        } else if typ != SCRIPT_TYPE_IN {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        self.script.check()
+    }
+}
+
 impl TxIn {
+    /// 是否是coinbase输入
+    pub fn is_coinbase(&self) -> bool {
+        self.out == Hasher::zero() && self.idx == 0
+    }
     fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
         wb.encode(&self.out);
         wb.u16(self.idx);
@@ -384,6 +508,21 @@ pub struct TxOut {
     value: i64,
     ///输出脚本
     script: Script,
+}
+
+impl Checker for TxOut {
+    fn check_value(&self) -> Result<(), errors::Error> {
+        //检测金额
+        if !consts::is_valid_amount(&self.value) {
+            return Err(errors::Error::InvalidAmount);
+        }
+        //检测脚本类型
+        if self.script.get_type()? != SCRIPT_TYPE_OUT {
+            return Err(errors::Error::ScriptFmtErr);
+        }
+        //检测脚本
+        self.script.check()
+    }
 }
 
 impl TxOut {

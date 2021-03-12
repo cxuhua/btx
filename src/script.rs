@@ -522,31 +522,28 @@ impl Script {
         }
         Ok(ops)
     }
+    /// 获取脚本最大长度
+    pub fn max_size(&self) -> Result<usize, errors::Error> {
+        match self.get_type()? {
+            SCRIPT_TYPE_CB => Ok(MAX_SCRIPT_CB_SIZE),
+            SCRIPT_TYPE_IN => Ok(MAX_SCRIPT_IN_SIZE),
+            SCRIPT_TYPE_OUT => Ok(MAX_SCRIPT_OUT_SIZE),
+            _ => return Err(errors::Error::ScriptFmtErr),
+        }
+    }
     ///检测脚本数据
     pub fn check(&self) -> Result<(), errors::Error> {
+        //最大限制长度
         if self.len() > MAX_SCRIPT_SIZE {
             return Err(errors::Error::ScriptFmtErr);
         }
-        if self.ops()? > MAX_SCRIPT_OPS {
+        //不同类型长度
+        if self.len() == 0 || self.len() > self.max_size()? {
             return Err(errors::Error::ScriptFmtErr);
         }
-        match self.get_type()? {
-            SCRIPT_TYPE_CB => {
-                if self.len() > MAX_SCRIPT_CB_SIZE {
-                    return Err(errors::Error::ScriptFmtErr);
-                }
-            }
-            SCRIPT_TYPE_IN => {
-                if self.len() > MAX_SCRIPT_IN_SIZE {
-                    return Err(errors::Error::ScriptFmtErr);
-                }
-            }
-            SCRIPT_TYPE_OUT => {
-                if self.len() > MAX_SCRIPT_OUT_SIZE {
-                    return Err(errors::Error::ScriptFmtErr);
-                }
-            }
-            _ => return Err(errors::Error::ScriptFmtErr),
+        //执行单元数量
+        if self.ops()? > MAX_SCRIPT_OPS {
+            return Err(errors::Error::ScriptFmtErr);
         }
         Ok(())
     }
@@ -611,6 +608,13 @@ impl Script {
     pub fn string(&mut self, s: &String) -> &mut Self {
         self.data(s.as_bytes());
         return self;
+    }
+    /// push类型
+    pub fn put<T>(&mut self, v: &T)
+    where
+        T: IntoBytes,
+    {
+        self.data(&v.into_bytes());
     }
     ///push binary
     pub fn data(&mut self, v: &[u8]) -> &mut Self {

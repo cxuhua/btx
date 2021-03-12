@@ -14,8 +14,8 @@ impl MerkleTree {
     //链接hash值再次hash
     fn hash(h1: &Hasher, h2: &Hasher) -> Hasher {
         let mut w = Writer::default();
-        w.put_bytes(h1.to_bytes());
-        w.put_bytes(h2.to_bytes());
+        w.put_bytes(h1.as_bytes());
+        w.put_bytes(h2.as_bytes());
         Hasher::hash(w.bytes())
     }
     //根据高度获取宽度

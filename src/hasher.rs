@@ -252,8 +252,8 @@ impl Hasher {
         mi.reverse();
         mi.encode_hex()
     }
-    pub fn to_bytes(&self) -> &[u8] {
-        &self.inner[..]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.inner
     }
 }
 

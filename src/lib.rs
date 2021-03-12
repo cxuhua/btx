@@ -1,13 +1,15 @@
 #![allow(dead_code)]
 
-mod account;
-mod bytes;
-mod consts;
-mod crypto;
-mod errors;
-mod hasher;
-mod iobuf;
-mod script;
-mod block;
-mod util;
-mod merkle;
+pub mod account;
+pub mod block;
+pub mod bytes;
+pub mod consts;
+pub mod crypto;
+pub mod errors;
+pub mod hasher;
+pub mod index;
+pub mod iobuf;
+pub mod merkle;
+pub mod script;
+pub mod store;
+pub mod util;

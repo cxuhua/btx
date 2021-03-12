@@ -10,7 +10,7 @@ use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signature};
 fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
     let ctx = Secp256k1::verification_only();
     let uv = Hasher::hash(msg);
-    let msg = Message::from_slice(uv.to_bytes())?;
+    let msg = Message::from_slice(uv.as_bytes())?;
     Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
 }
 
@@ -18,7 +18,7 @@ fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error>
 fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
     let ctx = Secp256k1::signing_only();
     let uv = Hasher::hash(msg);
-    let msg = Message::from_slice(uv.to_bytes())?;
+    let msg = Message::from_slice(uv.as_bytes())?;
     Ok(ctx.sign(&msg, seckey))
 }
 
@@ -132,7 +132,7 @@ impl PubKey {
     /// pk 开头的为公钥id
     pub fn encode(&self) -> Result<String, bech32::Error> {
         let v = self.hash();
-        let b = v.to_bytes();
+        let b = v.as_bytes();
         bech32::encode(PK_HRP, b.to_base32())
     }
 }

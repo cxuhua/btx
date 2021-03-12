@@ -11,6 +11,8 @@ pub enum Error {
     InvalidSignature,
     //无效的参数
     InvalidParam,
+    //无效的金额
+    InvalidAmount,
     //签名错误
     SignatureErr,
     //验签错误
@@ -35,4 +37,10 @@ pub enum Error {
     IoBufReadErr,
     //默克尔树错误
     BadMerkleTree,
+    //无效的交易
+    InvalidTx,
+    //未发现指定的区块
+    NotFoundBlock,
+    //未发现指定的交易数据
+    NotFoundTx,
 }

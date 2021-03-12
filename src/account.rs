@@ -108,15 +108,10 @@ impl Account {
             num: num,
             less: less,
             arb: 0xFF,
-            pris: Vec::with_capacity(num as usize),
-            pubs: Vec::with_capacity(num as usize),
-            sigs: Vec::with_capacity(num as usize),
+            pris: vec![None; num as usize],
+            pubs: vec![None; num as usize],
+            sigs: vec![None; num as usize],
         };
-        for _ in 0..acc.num {
-            acc.pris.push(None);
-            acc.pubs.push(None);
-            acc.sigs.push(None);
-        }
         if is_gen {
             acc.initialize()
         }
@@ -210,7 +205,7 @@ impl Account {
     ///带前缀编码地址
     pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
         let hv = self.hash()?;
-        let bb = hv.to_bytes();
+        let bb = hv.as_bytes();
         match bech32::encode(hrp, bb.to_base32()) {
             Ok(addr) => return Ok(addr),
             Err(_) => return Err(errors::Error::InvalidAccount),
@@ -288,6 +283,7 @@ impl Account {
     /// 标准验签
     /// msg数据为签名数据,不需要进行hash,签名时会进行一次Hasher::hash*
     pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
+        //检测账户是否包含公钥
         if !self.check_with_pubs() {
             return Err(errors::Error::InvalidAccount);
         }
@@ -295,7 +291,7 @@ impl Account {
         if !self.use_arb() && self.sigs_size() < self.less {
             return Err(errors::Error::InvalidAccount);
         }
-        //启用时只少一个签名
+        //启用时至少一个签名
         if self.use_arb() && self.sigs_size() < 1 {
             return Err(errors::Error::InvalidAccount);
         }
