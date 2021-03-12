@@ -36,7 +36,7 @@ impl<'a> Reader<'a> {
     fn check(&self, l: usize) -> Result<usize, errors::Error> {
         let rl = self.remaining();
         if rl < l {
-            Err(errors::Error::IoBufReadErr)
+            errors::Error::msg("IoBufReadErr")
         } else {
             Ok(rl)
         }
@@ -77,7 +77,7 @@ impl<'a> Reader<'a> {
             1 => Ok(self.u8()? as usize),
             2 => Ok(self.u16()? as usize),
             3 => Ok(self.u32()? as usize),
-            _ => Err(errors::Error::IoBufReadErr),
+            _ => errors::Error::msg("IoBufReadErr"),
         }
     }
     pub fn u16(&mut self) -> Result<u16, errors::Error> {

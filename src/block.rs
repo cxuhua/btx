@@ -100,7 +100,7 @@ impl Block {
     /// 按索引获取交易
     pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
         if idx >= self.txs.len() {
-            return Err(errors::Error::NotFoundTx);
+            return errors::Error::msg("NotFoundTx");
         }
         Ok(&self.txs[idx])
     }
@@ -215,7 +215,7 @@ impl Script {
                 let mut exector = Exector::new();
                 let ops = exector.exec(self, &InEnv {})?;
                 if ops > MAX_SCRIPT_OPS {
-                    return Err(errors::Error::ScriptFmtErr);
+                    return errors::Error::msg("ScriptFmtErr");
                 }
                 exector.check(1)?;
                 let ele = exector.top(-1);
@@ -223,7 +223,7 @@ impl Script {
                 //为签名编码账户数据
                 acc.encode_sign(wb)?;
             }
-            _ => return Err(errors::Error::ScriptFmtErr),
+            _ => return errors::Error::msg("ScriptFmtErr"),
         }
         Ok(())
     }
@@ -271,11 +271,11 @@ impl Checker for Tx {
     fn check_value(&self) -> Result<(), errors::Error> {
         //coinbase只能有一个输入
         if self.is_coinbase() && self.ins.len() != 1 {
-            return Err(errors::Error::InvalidTx);
+            return errors::Error::msg("InvalidTx");
         }
         //输出不能为空
         if self.outs.len() == 0 {
-            return Err(errors::Error::InvalidTx);
+            return errors::Error::msg("InvalidTx");
         }
         for iv in self.ins.iter() {
             iv.check_value()?;
@@ -430,10 +430,10 @@ impl Checker for TxIn {
         let typ = self.script.get_type()?;
         if self.is_coinbase() {
             if typ != SCRIPT_TYPE_CB {
-                return Err(errors::Error::ScriptFmtErr);
+                return errors::Error::msg("ScriptFmtErr");
             }
         } else if typ != SCRIPT_TYPE_IN {
-            return Err(errors::Error::ScriptFmtErr);
+            return errors::Error::msg("ScriptFmtErr");
         }
         self.script.check()
     }
@@ -514,11 +514,11 @@ impl Checker for TxOut {
     fn check_value(&self) -> Result<(), errors::Error> {
         //检测金额
         if !consts::is_valid_amount(&self.value) {
-            return Err(errors::Error::InvalidAmount);
+            return errors::Error::msg("InvalidAmount");
         }
         //检测脚本类型
         if self.script.get_type()? != SCRIPT_TYPE_OUT {
-            return Err(errors::Error::ScriptFmtErr);
+            return errors::Error::msg("ScriptFmtErr");
         }
         //检测脚本
         self.script.check()

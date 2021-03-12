@@ -140,7 +140,7 @@ impl TryFrom<u32> for Hasher {
                 return Ok(v.into());
             }
         }
-        Err(errors::Error::InvalidParam)
+        errors::Error::msg("InvalidParam")
     }
 }
 

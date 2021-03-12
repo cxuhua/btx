@@ -38,7 +38,7 @@ impl MerkleTree {
         ids: &Vec<Hasher>,
     ) -> Result<Hasher, Error> {
         if ids.len() != self.trans {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("BadMerkleTree");
         }
         if height == 0 {
             return Ok(ids[pos].clone());
@@ -144,26 +144,26 @@ impl MerkleTree {
         let mut idx: Vec<usize> = vec![];
         self.bad = false;
         if self.trans == 0 {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("trans == 0");
         }
         if self.vhash.len() > self.trans {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("trans == len");
         }
         if self.bits.len() < self.vhash.len() {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("bits len < ids len");
         }
         let (mut nbits, mut nhash, height) = (0, 0, self.tree_height());
         let root = self.extract(height, 0, &mut nbits, &mut nhash, &mut ids, &mut idx);
         if self.bad {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("BadMerkleTree");
         }
         if (nbits + 7) / 8 != (self.bits.len() + 7 / 8) {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("BadMerkleTree");
         }
         if nhash != self.vhash.len() {
-            return Err(Error::BadMerkleTree);
+            return Error::msg("BadMerkleTree");
         }
-        return Ok(root);
+        Ok(root)
     }
 }
 

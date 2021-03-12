@@ -60,7 +60,7 @@ impl FromBytes for Account {
             acc.sigs[i] = Some(r.get()?);
         }
         if !acc.check_with_pubs() {
-            return Err(errors::Error::InvalidAccount);
+            return errors::Error::msg("InvalidAccount");
         }
         Ok(acc)
     }
@@ -119,7 +119,7 @@ impl Account {
             acc.arb = num - 1;
         }
         if !acc.check() {
-            return Err(errors::Error::InvalidAccount);
+            return errors::Error::msg("InvalidAccount");
         }
         Ok(acc)
     }
@@ -167,10 +167,10 @@ impl Account {
     /// 不带签名和私钥的数据
     pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
         if !self.check() {
-            return Err(errors::Error::InvalidPublicKey);
+            return errors::Error::msg("InvalidPublicKey");
         }
         if self.pubs_size() != self.num {
-            return Err(errors::Error::InvalidPublicKey);
+            return errors::Error::msg("InvalidPublicKey");
         }
         wb.u8(self.num);
         wb.u8(self.less);
@@ -185,10 +185,10 @@ impl Account {
     //hash账户用于生成地址
     pub fn hash(&self) -> Result<Hasher, errors::Error> {
         if !self.check() {
-            return Err(errors::Error::InvalidPublicKey);
+            return errors::Error::msg("InvalidPublicKey");
         }
         if self.pubs_size() != self.num {
-            return Err(errors::Error::InvalidPublicKey);
+            return errors::Error::msg("InvalidPublicKey");
         }
         let mut wb = iobuf::Writer::default();
         wb.u8(self.num);
@@ -208,7 +208,7 @@ impl Account {
         let bb = hv.as_bytes();
         match bech32::encode(hrp, bb.to_base32()) {
             Ok(addr) => return Ok(addr),
-            Err(_) => return Err(errors::Error::InvalidAccount),
+            Err(_) => return errors::Error::msg("InvalidAccount"),
         }
     }
     ///带固定前缀编码地址
@@ -218,7 +218,7 @@ impl Account {
     ///使用指定的私钥签名消息 0 -> pris.len()
     pub fn sign_with_index(&mut self, idx: usize, msg: &[u8]) -> Result<(), errors::Error> {
         if idx >= self.pris.len() {
-            return Err(errors::Error::InvalidParam);
+            return errors::Error::msg("InvalidParam");
         }
         match &self.pris[idx] {
             Some(pk) => match pk.sign(msg) {
@@ -227,23 +227,23 @@ impl Account {
                     return Ok(());
                 }
                 Err(_) => {
-                    return Err(errors::Error::SignatureErr);
+                    return errors::Error::msg("SignatureErr");
                 }
             },
             None => {
-                return Err(errors::Error::InvalidPrivateKey);
+                return errors::Error::msg("InvalidPrivateKey");
             }
         }
     }
     ///使用指定的公钥验签所有签名,如果其中一个通过返回true
     pub fn verify_with_public(&self, ipub: usize, msg: &[u8]) -> Result<bool, errors::Error> {
         if ipub >= self.pubs.len() {
-            return Err(errors::Error::InvalidParam);
+            return errors::Error::msg("InvalidParam");
         }
         //
         let pb = self.pubs[ipub].as_ref();
         if pb.is_none() {
-            return Err(errors::Error::InvalidPublicKey);
+            return errors::Error::msg("InvalidPublicKey");
         }
         let pb = pb.unwrap();
         //逐个验证签名
@@ -257,7 +257,7 @@ impl Account {
                 return Ok(true);
             }
         }
-        return Err(errors::Error::VerifySignErr);
+        return errors::Error::msg("VerifySignErr");
     }
     /// 使用指定的公钥和签名验签所有签名,如果其中一个通过返回true
     fn verify_with_index(
@@ -267,17 +267,17 @@ impl Account {
         msg: &[u8],
     ) -> Result<bool, errors::Error> {
         if ipub >= self.pubs.len() {
-            return Err(errors::Error::InvalidParam);
+            return errors::Error::msg("InvalidParam");
         }
         if isig >= self.sigs.len() {
-            return Err(errors::Error::InvalidParam);
+            return errors::Error::msg("InvalidParam");
         }
         match (&self.pubs[ipub], &self.sigs[isig]) {
             (Some(pb), Some(sb)) => match pb.verify(msg, sb) {
                 Ok(rb) => Ok(rb),
-                _ => Err(errors::Error::VerifySignErr),
+                _ => errors::Error::msg("VerifySignErr"),
             },
-            _ => return Err(errors::Error::InvalidParam),
+            _ => return errors::Error::msg("InvalidParam"),
         }
     }
     /// 标准验签
@@ -285,15 +285,15 @@ impl Account {
     pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
         //检测账户是否包含公钥
         if !self.check_with_pubs() {
-            return Err(errors::Error::InvalidAccount);
+            return errors::Error::msg("InvalidAccount");
         }
         //不启用仲裁时最小签名数量
         if !self.use_arb() && self.sigs_size() < self.less {
-            return Err(errors::Error::InvalidAccount);
+            return errors::Error::msg("InvalidAccount");
         }
         //启用时至少一个签名
         if self.use_arb() && self.sigs_size() < 1 {
-            return Err(errors::Error::InvalidAccount);
+            return errors::Error::msg("InvalidAccount");
         }
         //验证仲裁公钥签名
         if self.use_arb() {

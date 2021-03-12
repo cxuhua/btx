@@ -1,41 +1,66 @@
 use crate::block::{Block, Tx};
 use crate::errors::Error;
-use crate::hasher::Hasher;
+use crate::iobuf::Serializer;
+use core::hash;
+use std::cmp::{Eq, PartialEq};
 
-/// 区块链存储索引
-pub trait Indexer: Sized {
-    /// 从系统根据id查询区块数据
-    /// 返回一个借用数据,区块应该使用一个缓存系统进行缓存
-    /// 错误一般返回 NotFoundBlock
-    fn get_block_from_id(&mut self, _id: &Hasher) -> Result<&Block, Error> {
-        Err(Error::NotFoundBlock)
-    }
-    /// 查询交易数据
-    /// 先查询交易所在的区块,然后获取交易信息
-    /// 获取指定索引的数据
-    /// 错误一般返回NotFoundTx
-    fn get_tx_from_id(&mut self, _id: &Hasher, _idx: u16) -> Result<&Tx, Error> {
-        Err(Error::NotFoundTx)
-    }
-    /// 根据高度查询区块数据
-    fn get_block_from_height(&mut self, _height: u32) -> Result<&Block, Error> {
-        Err(Error::NotFoundBlock)
+pub struct IKey(Vec<u8>);
+
+impl hash::Hash for IKey {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        state.write(&self.0);
     }
 }
 
-#[test]
-fn test_index() {
-    struct A {
-        blk: Block,
+impl PartialEq for IKey {
+    fn eq(&self, other: &IKey) -> bool {
+        self.0 == other.0
     }
-    impl Indexer for A {
-        fn get_block_from_height(&mut self, _height: u32) -> Result<&Block, Error> {
-            Ok(&self.blk)
+}
+
+impl Eq for IKey {}
+
+#[derive(Debug)]
+pub enum IValue {
+    Block(Block), //存放区块数据
+    Tx(Tx),       //存放交易数据
+}
+
+impl IValue {
+    /// 作为区块返回
+    fn as_block(&self) -> Result<&Block, Error> {
+        match self {
+            IValue::Block(blk) => Ok(&blk),
+            _ => Error::msg("not found Block"),
         }
     }
-    let mut a = A {
-        blk: Block::default(),
-    };
-    let blk = a.get_block_from_height(100).unwrap();
-    println!("{:?}", blk);
+    /// 作为交易返回
+    fn as_tx(&self) -> Result<&Tx, Error> {
+        match self {
+            IValue::Tx(tx) => Ok(&tx),
+            _ => Error::msg("not found Tx"),
+        }
+    }
+}
+
+/// 区块链存储索引
+pub trait Indexer: Sized {
+    /// 根据k获取数据
+    fn get(&mut self, _k: &IKey) -> Result<IValue, Error> {
+        Error::msg("NotImpErr")
+    }
+}
+
+/// 数据文件分布说明
+/// data  --- 数据根目录
+///       --- entry 入口索引文件 leveldb
+///       --- block 区块内容目录 store存储
+///       --- index 索引目录,金额记录,区块头 leveldb
+
+#[test]
+fn test_index() {
+    struct A {}
+    impl Indexer for A {}
+    use lru::LruCache;
+    let mut c: LruCache<IKey, IValue> = LruCache::new(100);
 }
