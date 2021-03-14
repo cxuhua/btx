@@ -17,9 +17,9 @@ pub trait Checker: Sized {
     fn check_value(&self) -> Result<(), errors::Error>;
 }
 
-///区块定义
+/// 区块头
 #[derive(Debug)]
-pub struct Block {
+pub struct Header {
     ///区块版本 (u16,u16) = (基本时间戳倍数,版本)
     ver: u32,
     ///上个区块hash
@@ -32,126 +32,10 @@ pub struct Block {
     bits: u32,
     ///随机值
     nonce: u32,
-    ///交易列表
-    txs: Vec<Tx>,
 }
 
-impl PartialEq for Block {
-    fn eq(&self, other: &Block) -> bool {
-        self.ver == other.ver
-            && self.prev == other.prev
-            && self.merkle == other.merkle
-            && self.time == other.time
-            && self.bits == other.bits
-            && self.nonce == other.nonce
-            && self.txs.len() == other.txs.len()
-    }
-}
-
-impl Checker for Block {
-    fn check_value(&self) -> Result<(), errors::Error> {
-        for iv in self.txs.iter() {
-            iv.check_value()?
-        }
-        Ok(())
-    }
-}
-
-impl Default for Block {
-    fn default() -> Self {
-        let mut block = Block {
-            ver: Self::block_version(1, 1),
-            prev: Hasher::default(),
-            merkle: Hasher::default(),
-            time: 0,
-            bits: 0,
-            nonce: 0,
-            txs: vec![],
-        };
-        block.set_now_time();
-        block
-    }
-}
-
-impl Clone for Block {
-    fn clone(&self) -> Self {
-        Block {
-            ver: self.ver,
-            prev: self.prev.clone(),
-            merkle: self.merkle.clone(),
-            time: self.time,
-            bits: self.bits,
-            nonce: self.nonce,
-            txs: self.txs.clone(),
-        }
-    }
-}
-
-impl Serializer for Block {
-    fn encode(&self, wb: &mut Writer) {
-        self.encode_header(wb);
-        //交易数量
-        wb.u16(self.txs.len() as u16);
-        for tx in self.txs.iter() {
-            tx.encode(wb);
-        }
-    }
-    fn decode(r: &mut Reader) -> Result<Block, errors::Error> {
-        let mut blk = Block::default();
-        blk.decode_header(r)?;
-        //读取交易数量
-        for _ in 0..r.u16()? {
-            let tx: Tx = r.decode()?;
-            blk.txs.push(tx);
-        }
-        Ok(blk)
-    }
-}
-
-impl Block {
-    /// 按索引获取交易
-    pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
-        if idx >= self.txs.len() {
-            return errors::Error::msg("NotFoundTx");
-        }
-        Ok(&self.txs[idx])
-    }
-    /// 解码头部
-    fn decode_header(&mut self, r: &mut Reader) -> Result<(), errors::Error> {
-        self.ver = r.u32()?;
-        self.prev = r.decode()?;
-        self.merkle = r.decode()?;
-        self.time = r.u32()?;
-        self.bits = r.u32()?;
-        self.nonce = r.u32()?;
-        Ok(())
-    }
-    /// 编码区块头部
-    fn encode_header(&self, wb: &mut Writer) {
-        wb.u32(self.ver);
-        wb.encode(&self.prev);
-        wb.encode(&self.merkle);
-        wb.u32(self.time);
-        wb.u32(self.bits);
-        wb.u32(self.nonce);
-    }
-    /// 计算区块id
-    pub fn id(&self) -> Result<Hasher, errors::Error> {
-        let mut wb = Writer::default();
-        self.encode_header(&mut wb);
-        Ok(Hasher::hash(&wb.bytes()))
-    }
-    /// 计算merkle值
-    pub fn compute_merkle(&self) -> Result<Hasher, errors::Error> {
-        let mut ids = vec![];
-        for iv in self.txs.iter() {
-            let id = iv.id()?;
-            ids.push(id);
-        }
-        let root = MerkleTree::compute(&ids)?;
-        Ok(root)
-    }
-    /// 获取区块版本
+impl Header {
+    /// 合并区块版本
     fn block_version(r: u16, v: u16) -> u32 {
         (v as u32) | (r as u32) << 16
     }
@@ -181,6 +65,161 @@ impl Block {
         let r = ((self.ver >> 16) & 0xFFFF) as u16;
         self.ver = Self::block_version(r, v);
     }
+}
+
+impl PartialEq for Header {
+    fn eq(&self, other: &Header) -> bool {
+        self.ver == other.ver
+            && self.prev == other.prev
+            && self.merkle == other.merkle
+            && self.time == other.time
+            && self.bits == other.bits
+            && self.nonce == other.nonce
+    }
+}
+
+impl Checker for Header {
+    fn check_value(&self) -> Result<(), errors::Error> {
+        Ok(())
+    }
+}
+
+impl Default for Header {
+    fn default() -> Self {
+        Header {
+            ver: Self::block_version(1, 1),
+            prev: Hasher::default(),
+            merkle: Hasher::default(),
+            time: 0,
+            bits: 0,
+            nonce: 0,
+        }
+    }
+}
+
+impl Clone for Header {
+    fn clone(&self) -> Self {
+        Header {
+            ver: self.ver,
+            prev: self.prev.clone(),
+            merkle: self.merkle.clone(),
+            time: self.time,
+            bits: self.bits,
+            nonce: self.nonce,
+        }
+    }
+}
+
+impl Serializer for Header {
+    fn encode(&self, wb: &mut Writer) {
+        wb.u32(self.ver);
+        wb.encode(&self.prev);
+        wb.encode(&self.merkle);
+        wb.u32(self.time);
+        wb.u32(self.bits);
+        wb.u32(self.nonce);
+    }
+    fn decode(r: &mut Reader) -> Result<Header, errors::Error> {
+        let mut header = Header::default();
+        header.ver = r.u32()?;
+        header.prev = r.decode()?;
+        header.merkle = r.decode()?;
+        header.time = r.u32()?;
+        header.bits = r.u32()?;
+        header.nonce = r.u32()?;
+        Ok(header)
+    }
+}
+
+///区块定义
+#[derive(Debug)]
+pub struct Block {
+    //区块头
+    pub header: Header,
+    ///交易列表
+    pub txs: Vec<Tx>,
+}
+
+impl PartialEq for Block {
+    fn eq(&self, other: &Block) -> bool {
+        self.header == other.header && self.txs.len() == other.txs.len()
+    }
+}
+
+impl Checker for Block {
+    fn check_value(&self) -> Result<(), errors::Error> {
+        for iv in self.txs.iter() {
+            iv.check_value()?
+        }
+        Ok(())
+    }
+}
+
+impl Default for Block {
+    fn default() -> Self {
+        Block {
+            header: Header::default(),
+            txs: vec![],
+        }
+    }
+}
+
+impl Clone for Block {
+    fn clone(&self) -> Self {
+        Block {
+            header: self.header.clone(),
+            txs: self.txs.clone(),
+        }
+    }
+}
+
+impl Serializer for Block {
+    fn encode(&self, wb: &mut Writer) {
+        //
+        self.header.encode(wb);
+        //交易数量
+        wb.u16(self.txs.len() as u16);
+        for tx in self.txs.iter() {
+            tx.encode(wb);
+        }
+    }
+    fn decode(r: &mut Reader) -> Result<Block, errors::Error> {
+        let mut blk = Block::default();
+        //
+        blk.header = r.decode()?;
+        //读取交易数量
+        for _ in 0..r.u16()? {
+            let tx: Tx = r.decode()?;
+            blk.txs.push(tx);
+        }
+        Ok(blk)
+    }
+}
+
+impl Block {
+    /// 按索引获取交易
+    pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
+        if idx >= self.txs.len() {
+            return errors::Error::msg("NotFoundTx");
+        }
+        Ok(&self.txs[idx])
+    }
+    /// 计算区块id
+    pub fn id(&self) -> Result<Hasher, errors::Error> {
+        let mut wb = Writer::default();
+        self.header.encode(&mut wb);
+        Ok(Hasher::hash(&wb.bytes()))
+    }
+    /// 计算merkle值
+    pub fn compute_merkle(&self) -> Result<Hasher, errors::Error> {
+        let mut ids = vec![];
+        for iv in self.txs.iter() {
+            let id = iv.id()?;
+            ids.push(id);
+        }
+        let root = MerkleTree::compute(&ids)?;
+        Ok(root)
+    }
     ///追加交易元素
     pub fn append(&mut self, tx: Tx) {
         self.txs.push(tx)
@@ -190,22 +229,26 @@ impl Block {
 #[test]
 fn test_block_time() {
     let mut b = Block::default();
-    b.set_timestamp(100);
-    assert_eq!(b.ver, 1);
-    assert_eq!(b.time, 100);
+    b.header.set_timestamp(100);
+    assert_eq!(b.header.ver, 1);
+    assert_eq!(b.header.time, 100);
 
-    b.set_timestamp(101);
-    b.set_ver(10);
-    assert_eq!(b.ver, 10);
-    assert_eq!(b.time, 101);
+    b.header.set_timestamp(101);
+    b.header.set_ver(10);
+    assert_eq!(b.header.ver, 10);
+    assert_eq!(b.header.time, 101);
 
-    b.set_timestamp(10 * consts::BASE_UTC_UNIX_TIME + 101);
-    b.set_ver(12);
-    assert_eq!(b.ver, (10 << 16) | 12);
-    assert_eq!(b.time, 101);
+    b.header
+        .set_timestamp(10 * consts::BASE_UTC_UNIX_TIME + 101);
+    b.header.set_ver(12);
+    assert_eq!(b.header.ver, (10 << 16) | 12);
+    assert_eq!(b.header.time, 101);
 
-    assert_eq!(b.get_ver(), 12);
-    assert_eq!(b.get_timestamp(), 10 * consts::BASE_UTC_UNIX_TIME + 101);
+    assert_eq!(b.header.get_ver(), 12);
+    assert_eq!(
+        b.header.get_timestamp(),
+        10 * consts::BASE_UTC_UNIX_TIME + 101
+    );
 }
 
 impl Script {

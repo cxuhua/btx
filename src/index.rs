@@ -2,13 +2,24 @@ use crate::block::Block;
 use crate::hasher::Hasher;
 use bytes::BufMut;
 use core::hash;
+use db_key::Key;
 use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
+
+///
+impl Key for IKey {
+    fn from_u8(key: &[u8]) -> IKey {
+        IKey(key.to_vec())
+    }
+    fn as_slice<T, F: Fn(&[u8]) -> T>(&self, f: F) -> T {
+        f(self.bytes())
+    }
+}
 
 /// 按高度查询区块
 impl From<u32> for IKey {
@@ -16,6 +27,20 @@ impl From<u32> for IKey {
         let mut key = IKey(vec![]);
         key.0.put_u32_le(v);
         key
+    }
+}
+
+/// 按高度查询区块
+impl From<&[u8]> for IKey {
+    fn from(v: &[u8]) -> Self {
+        IKey(v.to_vec())
+    }
+}
+
+///
+impl From<Vec<u8>> for IKey {
+    fn from(v: Vec<u8>) -> Self {
+        IKey(v)
     }
 }
 
@@ -35,10 +60,22 @@ impl hash::Hash for IKey {
 }
 
 impl IKey {
+    /// 获取key字节
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
     /// 连接字节到key
     pub fn concat(&mut self, v: &[u8]) -> &mut Self {
         self.0.put_slice(v);
         self
+    }
+    /// 空key
+    pub fn empty() -> Self {
+        "".as_bytes().into()
+    }
+    //失败包含前缀
+    pub fn starts_with(&self, prefix: &IKey) -> bool {
+        self.0.starts_with(&prefix.0)
     }
 }
 
@@ -153,7 +190,7 @@ fn test_lru_write() {
     let blk = Block::default();
     c.put(1u32, blk);
     let v = c.get(1u32).unwrap();
-    let ver = v.get_ver();
+    let ver = v.header.get_ver();
     assert_eq!(ver, 1);
 }
 
