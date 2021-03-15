@@ -1,4 +1,5 @@
 use crate::block::Block;
+use crate::bytes::IntoBytes;
 use crate::hasher::Hasher;
 use bytes::BufMut;
 use core::hash;
@@ -7,12 +8,11 @@ use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
 use std::sync::Arc;
 use std::sync::Mutex;
-use crate::bytes::IntoBytes;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(PartialEq, Eq, Clone, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
 
-/// 
+///
 impl Key for IKey {
     fn from_u8(key: &[u8]) -> IKey {
         IKey(key.to_vec())
@@ -38,6 +38,13 @@ impl From<&[u8]> for IKey {
     }
 }
 
+/// 按高度查询区块
+impl From<&str> for IKey {
+    fn from(v: &str) -> Self {
+        IKey(v.as_bytes().to_vec())
+    }
+}
+
 ///
 impl From<Vec<u8>> for IKey {
     fn from(v: Vec<u8>) -> Self {
@@ -59,6 +66,10 @@ impl hash::Hash for IKey {
 }
 
 impl IKey {
+    //key 长度
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
     /// 获取key字节
     pub fn bytes(&self) -> &[u8] {
         &self.0
