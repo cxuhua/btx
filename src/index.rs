@@ -7,11 +7,12 @@ use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
 use std::sync::Arc;
 use std::sync::Mutex;
+use crate::bytes::IntoBytes;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
 
-///
+/// 
 impl Key for IKey {
     fn from_u8(key: &[u8]) -> IKey {
         IKey(key.to_vec())
@@ -47,9 +48,7 @@ impl From<Vec<u8>> for IKey {
 /// 按hash查询
 impl From<&Hasher> for IKey {
     fn from(v: &Hasher) -> Self {
-        let mut key = IKey(vec![]);
-        key.0.put_slice(v.as_bytes());
-        key
+        IKey(v.into_bytes())
     }
 }
 
@@ -118,7 +117,7 @@ impl BlkCache {
     pub fn len(&self) -> usize {
         match self.lru.lock() {
             Ok(w) => w.len(),
-            _ => 0,
+            _ => panic!("lock failed"),
         }
     }
     /// 加入缓存值
@@ -129,7 +128,7 @@ impl BlkCache {
     {
         match self.lru.lock() {
             Ok(mut w) => w.put(k.into(), Arc::new(v)),
-            _ => None,
+            _ => panic!("lock failed"),
         }
     }
     /// 从缓存获取值,不改变缓存状态
@@ -142,7 +141,7 @@ impl BlkCache {
                 Some(v) => Some(v.clone()),
                 _ => None,
             },
-            _ => None,
+            _ => panic!("lock failed"),
         }
     }
 
@@ -153,7 +152,7 @@ impl BlkCache {
     {
         match self.lru.lock() {
             Ok(w) => w.contains(&k.into()),
-            _ => false,
+            _ => panic!("lock failed"),
         }
     }
 
@@ -164,7 +163,7 @@ impl BlkCache {
     {
         match self.lru.lock() {
             Ok(mut w) => w.pop(&k.into()),
-            _ => None,
+            _ => panic!("lock failed"),
         }
     }
 
@@ -179,7 +178,7 @@ impl BlkCache {
                 Some(v) => Some(v.clone()),
                 _ => None,
             },
-            _ => None,
+            _ => panic!("lock failed"),
         }
     }
 }

@@ -9,7 +9,7 @@ pub mod errors;
 pub mod hasher;
 pub mod index;
 pub mod iobuf;
-pub mod leveldb;
+// pub mod leveldb;
 pub mod merkle;
 pub mod script;
 pub mod store;
