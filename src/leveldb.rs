@@ -125,8 +125,8 @@ fn test_leveldb_batch() {
         wv.value = i as i64;
         b1.put(&i.into(), &wv);
     }
-    let b = b1.bytes();
-    let mut b2: IBatch = b.bytes().try_into().unwrap();
+    let b = &b1.bytes();
+    let mut b2: IBatch = b.try_into().unwrap();
     assert_eq!(b1.bytes(), b2.bytes());
     //获取回退批次
     let r = b1.reverse();
@@ -158,6 +158,13 @@ struct IBatchIter<'a> {
     w: &'a mut Writer, //数据长度
 }
 
+impl TryFrom<&Writer> for IBatch {
+    type Error = Error;
+    fn try_from(wb: &Writer) -> Result<Self, Self::Error> {
+        wb.bytes().try_into()
+    }
+}
+
 /// 从字节获取对象
 impl TryFrom<&[u8]> for IBatch {
     type Error = Error;
@@ -166,14 +173,14 @@ impl TryFrom<&[u8]> for IBatch {
         let mut b = IBatch::new(false);
         while r.remaining() > 0 {
             match r.u8()? {
-                1 => {
+                1u8 => {
                     let kl = r.u16()?;
                     let kb = r.get_bytes(kl as usize)?;
                     let vl = r.u16()?;
                     let vv = r.get_bytes(vl as usize)?;
                     b.put_bytes(&kb.into(), &vv);
                 }
-                2 => {
+                2u8 => {
                     let kl = r.u16()?;
                     let kb = r.get_bytes(kl as usize)?;
                     b.del(&kb.into(), None);
