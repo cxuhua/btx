@@ -2,6 +2,7 @@ use crate::block::Block;
 use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
+use crate::leveldb::{LevelDB, DB};
 use bytes::BufMut;
 use core::hash;
 use db_key::Key;
@@ -97,46 +98,44 @@ impl IKey {
 /// 优先从缓存获取,失败从数据库获取
 pub trait Indexer: Sized {
     /// 根据k获取区块
-    fn get<K>(&self, _k: K) -> Option<Arc<Block>>
-    where
-        K: Into<IKey>;
-    /// 获取区块缓存器
-    fn cache(&self) -> Option<&BlkCache>;
+    fn get(&self, _k: &IKey) -> Option<Arc<Block>>;
 }
 
 pub struct BlkIndexer {
     root: String,    //数据根目录
-    entry: String,   //入口数据库
     block: String,   //内容存储
     index: String,   //索引目录
     cache: BlkCache, //缓存
+    idxdb: LevelDB,  //索引数据库指针
 }
 
 impl Indexer for BlkIndexer {
-    fn get<K>(&self, k: K) -> Option<Arc<Block>>
-    where
-        K: Into<IKey>,
-    {
+    /// 从索引中获取区块
+    fn get(&self, k: &IKey) -> Option<Arc<Block>> {
         //如果缓存中存在
         if let Some(v) = self.cache.get(k) {
             return Some(v);
         }
         //从数据库查询并加入缓存
-        None
-    }
-    fn cache(&self) -> Option<&BlkCache> {
-        None
+        let v: Option<Block> = self.idxdb.get(k);
+        if v.is_none() {
+            return None;
+        }
+        let blk = v.unwrap();
+        //加入缓存
+        self.cache.put(k, &blk);
+        //
+        Some(Arc::new(blk))
     }
 }
 
 /// 数据文件分布说明
 /// data  --- 数据根目录
-///       --- entry 入口索引文件 leveldb
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
     /// 如果目录不存在直接创建
-    fn miss_create_dir(&self, dir: &str) -> Result<(), Error> {
+    fn miss_create_dir(dir: &str) -> Result<(), Error> {
         let p = Path::new(dir);
         //目录是否存在
         let has = match fs::metadata(p).map(|v| v.is_dir()) {
@@ -151,33 +150,19 @@ impl BlkIndexer {
             Err(err) => Error::std(err),
         }
     }
-    /// 初始化
-    fn init(&self) -> Result<(), Error> {
-        //root dir
-        self.miss_create_dir(&self.root)?;
-        //entry dir
-        self.miss_create_dir(&self.entry)?;
-        //block dir
-        self.miss_create_dir(&self.block)?;
-        //index dir
-        self.miss_create_dir(&self.index)?;
-        //entry leveldb
-        //block store
-        //index leveldb
-        Ok(())
-    }
-
     /// 创建存储索引
     pub fn new(dir: &str) -> Result<Self, Error> {
-        let indexer = BlkIndexer {
+        let idxpath = String::from(dir) + "/index";
+        Self::miss_create_dir(&idxpath)?;
+        let blkpath = String::from(dir) + "/block";
+        Self::miss_create_dir(&blkpath)?;
+        Ok(BlkIndexer {
             root: String::from(dir),
-            entry: String::from(dir) + "/entry",
-            block: String::from(dir) + "/block",
-            index: String::from(dir) + "/index",
+            block: blkpath.clone(),
+            index: idxpath.clone(),
             cache: BlkCache::default(),
-        };
-        indexer.init()?;
-        Ok(indexer)
+            idxdb: LevelDB::open(Path::new(&idxpath))?,
+        })
     }
 }
 
@@ -211,48 +196,33 @@ impl BlkCache {
     }
     /// 加入缓存值
     /// 如果存在将返回旧值
-    pub fn put<K>(&self, k: K, v: Block) -> Option<Arc<Block>>
-    where
-        K: Into<IKey>,
-    {
+    pub fn put(&self, k: &IKey, v: &Block) -> Option<Arc<Block>> {
         let mut wl = self.lru.lock().unwrap();
-        wl.put(k.into(), Arc::new(v))
+        wl.put(k.clone(), Arc::new(v.clone()))
     }
     /// 从缓存获取值,不改变缓存状态
-    pub fn peek<K, F>(&self, k: K) -> Option<Arc<Block>>
-    where
-        K: Into<IKey>,
-    {
+    pub fn peek<F>(&self, k: &IKey) -> Option<Arc<Block>> {
         let wl = self.lru.lock().unwrap();
-        wl.peek(&k.into()).map(|v| v.clone())
+        wl.peek(k).map(|v| v.clone())
     }
 
     /// 检测指定的key是否存在
-    pub fn has<K>(&self, k: K) -> bool
-    where
-        K: Into<IKey>,
-    {
+    pub fn has(&self, k: &IKey) -> bool {
         let wl = self.lru.lock().unwrap();
-        wl.contains(&k.into())
+        wl.contains(k)
     }
 
     /// 从缓存移除数据
-    pub fn pop<K>(&self, k: K) -> Option<Arc<Block>>
-    where
-        K: Into<IKey>,
-    {
+    pub fn pop(&self, k: &IKey) -> Option<Arc<Block>> {
         let mut wl = self.lru.lock().unwrap();
-        wl.pop(&k.into())
+        wl.pop(k)
     }
 
     /// 从缓存获取值并复制返回
     /// 复制对应的值返回
-    pub fn get<K>(&self, k: K) -> Option<Arc<Block>>
-    where
-        K: Into<IKey>,
-    {
+    pub fn get(&self, k: &IKey) -> Option<Arc<Block>> {
         let mut wl = self.lru.lock().unwrap();
-        wl.get(&k.into()).map(|v| v.clone())
+        wl.get(k).map(|v| v.clone())
     }
 }
 
@@ -260,8 +230,8 @@ impl BlkCache {
 fn test_lru_write() {
     let c = BlkCache::default();
     let blk = Block::default();
-    c.put(1u32, blk);
-    let v = c.get(1u32).unwrap();
+    c.put(&1u32.into(), &blk);
+    let v = c.get(&1u32.into()).unwrap();
     let ver = v.header.get_ver();
     assert_eq!(ver, 1);
 }
@@ -270,11 +240,11 @@ fn test_lru_write() {
 fn test_lru_cache() {
     let c = BlkCache::default();
     let blk = Block::default();
-    c.put(1u32, blk);
-    let v = c.get(1u32).unwrap();
+    c.put(&1u32.into(), &blk);
+    let v = c.get(&1u32.into()).unwrap();
     assert_eq!(v.as_ref(), &Block::default());
     assert_eq!(1, c.len());
-    let v = c.pop(1u32).unwrap();
+    let v = c.pop(&1u32.into()).unwrap();
     assert_eq!(v.as_ref(), &Block::default());
     assert_eq!(0, c.len());
 }
@@ -287,8 +257,8 @@ fn test_lru_thread() {
     for _ in 0..10 {
         let c1 = c.clone();
         thread::spawn(move || {
-            c1.put(1u32, Block::default());
-            let v = c1.get(1u32).unwrap();
+            c1.put(&1u32.into(), &Block::default());
+            let v = c1.get(&1u32.into()).unwrap();
             assert_eq!(v.as_ref(), &Block::default());
             assert_eq!(1, c1.len());
         });
