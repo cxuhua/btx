@@ -13,17 +13,9 @@ pub trait Serializer: Sized {
         Self: Default;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Writer {
     inner: Vec<u8>,
-}
-
-impl Clone for Writer {
-    fn clone(&self) -> Self {
-        Writer {
-            inner: self.inner.clone(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -145,16 +137,6 @@ impl<'a> Reader<'a> {
         T::decode(self)
     }
 }
-
-//a == b
-impl PartialEq for Writer {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-//a == a
-impl Eq for Writer {}
 
 impl Default for Writer {
     fn default() -> Self {

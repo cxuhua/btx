@@ -8,6 +8,7 @@ use leveldb::iterator::LevelDBIterator;
 use leveldb::iterator::{Iterable, Iterator, RevIterator};
 use leveldb::kv::KV;
 use leveldb::options::{Options, ReadOptions, WriteOptions};
+use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::path::Path;
 /// kv数据索引存储定义
@@ -36,26 +37,23 @@ pub trait DB: Sized {
     /// 从指定的key向前迭代
     fn reverse<'a>(&'a self, key: &'a IKey) -> Iter<'a, RevIterator<'a, IKey>>;
 
-    /// 创建批写入入
-    /// rev:是否添加回退操作
-    fn batch<'a>(&'a self, rev: bool) -> IBatch;
+    /// 写入批次数据
+    fn write(&self, b: &IBatch, sync: bool) -> Result<(), Error>;
 }
 
 /// 批操作对象
-pub struct IBatch<'a> {
-    l: &'a LevelDB,
+/// 写入的数据或者key长度不能超过0xFFFF
+pub struct IBatch {
     b: Writebatch<IKey>,
     f: Option<Writebatch<IKey>>,
 }
 
-impl<'a> IBatch<'a> {
-    /// 写入数据库
-    pub fn write(&self, sync: bool) -> Result<(), Error> {
-        let mut opts = WriteOptions::new();
-        opts.sync = sync;
-        match self.l.db.write(opts, &self.b) {
-            Ok(_) => Ok(()),
-            Err(err) => Error::std(err),
+impl IBatch {
+    /// 创建批处理对象
+    pub fn new(rev: bool) -> Self {
+        IBatch {
+            b: Writebatch::new(),
+            f: if rev { Some(Writebatch::new()) } else { None },
         }
     }
     /// 清空批次
@@ -67,7 +65,7 @@ impl<'a> IBatch<'a> {
     }
     /// 删除数据并写入回退数据(如果需要)
     /// 如果v存在将v写入回退批次
-    pub fn del<V>(&mut self, k: &IKey, v: Option<&[u8]>) {
+    pub fn del(&mut self, k: &IKey, v: Option<&[u8]>) {
         self.b.delete(k.clone());
         if v.is_none() {
             return;
@@ -77,11 +75,33 @@ impl<'a> IBatch<'a> {
         }
     }
     /// 添加kv数据
-    pub fn put(&mut self, k: IKey, v: &[u8]) {
+    fn put_bytes(&mut self, k: &IKey, v: &[u8]) {
+        assert!(k.len() < 0xFFFF && v.len() < 0xFFFF);
         self.b.put(k.clone(), v);
         if let Some(ref mut fv) = self.f {
             fv.delete(k.clone())
         }
+    }
+    /// 添加kv数据
+    pub fn put<V>(&mut self, k: &IKey, v: &V)
+    where
+        V: Serializer,
+    {
+        let mut wb = Writer::default();
+        v.encode(&mut wb);
+        assert!(k.len() < 0xFFFF && wb.len() < 0xFFFF);
+        self.b.put(k.clone(), wb.bytes());
+        if let Some(ref mut fv) = self.f {
+            fv.delete(k.clone())
+        }
+    }
+
+    /// 获取批次数据
+    pub fn bytes(&mut self) -> Writer {
+        let mut writer = Writer::default();
+        let iter = IBatchIter { w: &mut writer };
+        self.b.iterate(Box::new(iter));
+        writer
     }
 
     /// 获取回退批次写入器
@@ -95,9 +115,74 @@ impl<'a> IBatch<'a> {
     }
 }
 
+#[test]
+fn test_leveldb_batch() {
+    use crate::block::TxOut;
+    //创建写入批次
+    let mut b1 = IBatch::new(true);
+    for i in 1..10u32 {
+        let mut wv = TxOut::default();
+        wv.value = i as i64;
+        b1.put(&i.into(), &wv);
+    }
+    let b = b1.bytes();
+    let mut b2: IBatch = b.bytes().try_into().unwrap();
+    assert_eq!(b1.bytes(), b2.bytes());
+    //获取回退批次
+    let r = b1.reverse();
+    let rb = r.bytes();
+    let rw: IBatch = rb.try_into().unwrap();
+    //创建测试库
+    use tempdir::TempDir;
+    let tmp = TempDir::new("db").unwrap();
+    let db = LevelDB::open(tmp.path()).unwrap();
+    //写入批次
+    db.write(&b1, false).unwrap();
+    for i in 1..10u32 {
+        let out: TxOut = db.get(&i.into()).unwrap();
+        assert_eq!(out.value, i as i64);
+    }
+    //回退批次
+    db.write(&rw, false).unwrap();
+    for i in 1..10u32 {
+        assert_eq!(false, db.has(&i.into()));
+    }
+    //清空测试
+    b1.clear();
+    let b = b1.bytes();
+    assert_eq!(0, b.len());
+}
+
 /// 保存批次数据到Writer
 struct IBatchIter<'a> {
     w: &'a mut Writer, //数据长度
+}
+
+/// 从字节获取对象
+impl TryFrom<&[u8]> for IBatch {
+    type Error = Error;
+    fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
+        let mut r = Reader::new(b);
+        let mut b = IBatch::new(false);
+        while r.remaining() > 0 {
+            match r.u8()? {
+                1 => {
+                    let kl = r.u16()?;
+                    let kb = r.get_bytes(kl as usize)?;
+                    let vl = r.u16()?;
+                    let vv = r.get_bytes(vl as usize)?;
+                    b.put_bytes(&kb.into(), &vv);
+                }
+                2 => {
+                    let kl = r.u16()?;
+                    let kb = r.get_bytes(kl as usize)?;
+                    b.del(&kb.into(), None);
+                }
+                _ => return Error::msg("type byte error"),
+            }
+        }
+        Ok(b)
+    }
 }
 
 /// key或者value都不应该超过0xFFFF
@@ -128,9 +213,6 @@ impl<'a> WritebatchIterator for IBatchIter<'a> {
         self.w.put_bytes(k.bytes());
     }
 }
-
-#[test]
-fn test_db_batch() {}
 
 /// 线程安全的kv数据存储实现
 pub struct LevelDB {
@@ -173,11 +255,11 @@ impl<'a> Iter<'a, RevIterator<'a, IKey>> {
     pub fn foreach<F, V>(&mut self, f: F)
     where
         V: Serializer + Default,
-        F: Fn(usize, &IKey, Option<V>) -> bool,
+        F: Fn(usize, &IKey, &Option<V>) -> bool,
     {
         let mut i = 0;
         while self.iter.advance() {
-            if !f(i, &self.key(), self.value()) {
+            if !f(i, &self.key(), &self.value()) {
                 break;
             }
             i += 1;
@@ -216,7 +298,7 @@ impl<'a> Iter<'a, Iterator<'a, IKey>> {
     pub fn foreach<F, V>(&mut self, f: F)
     where
         V: Serializer + Default,
-        F: Fn(usize, &IKey, Option<V>) -> bool,
+        F: Fn(usize, &IKey, &Option<V>) -> bool,
     {
         let mut i = 0;
         while self.iter.advance() {
@@ -225,7 +307,7 @@ impl<'a> Iter<'a, Iterator<'a, IKey>> {
             if !pkey.map_or(false, |v| key.starts_with(v)) {
                 break;
             }
-            if !f(i, &key, self.value()) {
+            if !f(i, &key, &self.value()) {
                 break;
             }
             i += 1;
@@ -234,11 +316,13 @@ impl<'a> Iter<'a, Iterator<'a, IKey>> {
 }
 
 impl DB for LevelDB {
-    fn batch<'a>(&'a self, rev: bool) -> IBatch {
-        IBatch {
-            l: self,
-            b: Writebatch::new(),
-            f: if rev { Some(Writebatch::new()) } else { None },
+    /// 写入数据库
+    fn write(&self, b: &IBatch, sync: bool) -> Result<(), Error> {
+        let mut opts = WriteOptions::new();
+        opts.sync = sync;
+        match self.db.write(opts, &b.b) {
+            Ok(_) => Ok(()),
+            Err(err) => Error::std(err),
         }
     }
     fn iter<'a>(&'a self, prefix: &'a IKey) -> Iter<'a, Iterator<'a, IKey>> {
@@ -326,7 +410,6 @@ fn test_leveldb_get_put_del() {
     use crate::block::Block;
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
-    println!("temp db dir: {:?}", tmp);
     let db = LevelDB::open(tmp.path()).unwrap();
     for i in 1..10u32 {
         let mut blk = Block::default();
@@ -353,7 +436,6 @@ fn test_leveldb_iter() {
     use crate::block::Block;
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
-    println!("temp db dir: {:?}", tmp);
     let db = LevelDB::open(tmp.path()).unwrap();
     for i in ["1", "123", "1234", "12345", "1245", "2", "3"].iter() {
         let blk = Block::default();
@@ -363,7 +445,7 @@ fn test_leveldb_iter() {
     //按前缀迭代
     let prefix: IKey = "2".as_bytes().into();
     let iter = &mut db.iter(&prefix);
-    iter.foreach(|_, k, _: Option<Block>| {
+    iter.foreach(|_, k, _: &Option<Block>| {
         assert_eq!(k, &prefix);
         true
     });
@@ -371,7 +453,7 @@ fn test_leveldb_iter() {
     let prefix: IKey = "123".as_bytes().into();
     let iter = &mut db.iter(&prefix);
     let pv = ["123", "1234", "12345"];
-    iter.foreach(|i, k, v: Option<Block>| {
+    iter.foreach(|i, k, _: &Option<Block>| {
         let ik: IKey = pv[i].into();
         assert_eq!(k, &ik);
         true
@@ -383,7 +465,6 @@ fn test_leveldb_reverse() {
     use crate::block::Block;
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
-    println!("temp db dir: {:?}", tmp);
     let db = LevelDB::open(tmp.path()).unwrap();
     for i in ["1", "123", "1234", "12345", "1245", "2", "3"].iter() {
         let blk = Block::default();
@@ -395,7 +476,7 @@ fn test_leveldb_reverse() {
     let iter = &mut db.reverse(&prefix);
     let mut pv = ["1", "123", "1234", "12345"];
     pv.reverse();
-    iter.foreach(|i, k, _: Option<Block>| {
+    iter.foreach(|i, k, _: &Option<Block>| {
         let ik: IKey = pv[i].into();
         assert_eq!(k, &ik);
         true

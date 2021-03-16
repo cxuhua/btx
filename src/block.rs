@@ -21,17 +21,17 @@ pub trait Checker: Sized {
 #[derive(Debug)]
 pub struct Header {
     ///区块版本 (u16,u16) = (基本时间戳倍数,版本)
-    ver: u32,
+    pub ver: u32,
     ///上个区块hash
-    prev: Hasher,
+    pub prev: Hasher,
     ///莫克尔树id
-    merkle: Hasher,
+    pub merkle: Hasher,
     /// 时间戳
-    time: u32,
+    pub time: u32,
     ///区块难度
-    bits: u32,
+    pub bits: u32,
     ///随机值
-    nonce: u32,
+    pub nonce: u32,
 }
 
 impl Header {
@@ -315,11 +315,11 @@ impl Script {
 #[derive(Debug)]
 pub struct Tx {
     ///交易版本
-    ver: u32,
+    pub ver: u32,
     ///输入列表
-    ins: Vec<TxIn>,
+    pub ins: Vec<TxIn>,
     ///输出列表
-    outs: Vec<TxOut>,
+    pub outs: Vec<TxOut>,
 }
 
 impl Checker for Tx {
@@ -470,13 +470,13 @@ impl Clone for Tx {
 #[derive(Debug)]
 pub struct TxIn {
     ///消费的交易id
-    out: Hasher,
+    pub out: Hasher,
     ///对应的输出索引
-    idx: u16,
+    pub idx: u16,
     ///输入脚本
-    script: Script,
+    pub script: Script,
     ///序列号
-    seq: u32,
+    pub seq: u32,
 }
 
 impl Checker for TxIn {
@@ -560,9 +560,9 @@ impl Clone for TxIn {
 #[derive(Debug)]
 pub struct TxOut {
     ///输入金额
-    value: i64,
+    pub value: i64,
     ///输出脚本
-    script: Script,
+    pub script: Script,
 }
 
 impl Checker for TxOut {
