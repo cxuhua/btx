@@ -137,7 +137,7 @@ impl BlkIndexer {
         }
     }
     /// 创建存储索引
-    pub fn new(dir: &str) -> Result<Self, Error> {
+    pub fn open(dir: &str) -> Result<Self, Error> {
         let idxpath = String::from(dir) + "/index";
         Self::miss_create_dir(&idxpath)?;
         let blkpath = String::from(dir) + "/block";
@@ -154,7 +154,7 @@ impl BlkIndexer {
 
 #[test]
 fn test_block_indexer() {
-    let idx = BlkIndexer::new("/levedb-dir").unwrap();
+    let idx = BlkIndexer::open("/levedb-dir").unwrap();
 }
 
 /// lru线程安全的区块缓存实现
