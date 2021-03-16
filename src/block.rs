@@ -35,7 +35,7 @@ pub struct Header {
 }
 
 impl Header {
-    /// 合并区块版本
+    /// 合并区块时间戳倍率和区块版本到一个整数
     fn block_version(r: u16, v: u16) -> u32 {
         (v as u32) | (r as u32) << 16
     }

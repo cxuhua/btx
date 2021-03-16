@@ -4,7 +4,7 @@ use bytes::Buf;
 use bytes::BufMut;
 
 /// 二机制生成
-pub trait Serializer: Sized {
+pub trait Serializer {
     /// 编码数据到writer
     fn encode(&self, w: &mut Writer);
     /// 从reader读取数据

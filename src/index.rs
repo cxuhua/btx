@@ -2,7 +2,7 @@ use crate::block::Block;
 use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
-use crate::leveldb::{LevelDB, DB};
+use crate::leveldb::LevelDB;
 use bytes::BufMut;
 use core::hash;
 use db_key::Key;
@@ -94,13 +94,7 @@ impl IKey {
     }
 }
 
-/// 区块链存储索引
-/// 优先从缓存获取,失败从数据库获取
-pub trait Indexer: Sized {
-    /// 根据k获取区块
-    fn get(&self, _k: &IKey) -> Option<Arc<Block>>;
-}
-
+/// 区块索引
 pub struct BlkIndexer {
     root: String,    //数据根目录
     block: String,   //内容存储
@@ -109,9 +103,13 @@ pub struct BlkIndexer {
     idxdb: LevelDB,  //索引数据库指针
 }
 
-impl Indexer for BlkIndexer {
+/// 数据文件分布说明
+/// data  --- 数据根目录
+///       --- block 区块内容目录 store存储
+///       --- index 索引目录,金额记录,区块头 leveldb
+impl BlkIndexer {
     /// 从索引中获取区块
-    fn get(&self, k: &IKey) -> Option<Arc<Block>> {
+    pub fn get(&self, k: &IKey) -> Option<Arc<Block>> {
         //如果缓存中存在
         if let Some(v) = self.cache.get(k) {
             return Some(v);
@@ -127,22 +125,10 @@ impl Indexer for BlkIndexer {
         //
         Some(Arc::new(blk))
     }
-}
-
-/// 数据文件分布说明
-/// data  --- 数据根目录
-///       --- block 区块内容目录 store存储
-///       --- index 索引目录,金额记录,区块头 leveldb
-impl BlkIndexer {
     /// 如果目录不存在直接创建
     fn miss_create_dir(dir: &str) -> Result<(), Error> {
         let p = Path::new(dir);
-        //目录是否存在
-        let has = match fs::metadata(p).map(|v| v.is_dir()) {
-            Ok(v) => v,
-            _ => false,
-        };
-        if has {
+        if fs::metadata(p).map_or(false, |v| v.is_dir()) {
             return Ok(());
         }
         match fs::create_dir(&p) {
@@ -168,10 +154,11 @@ impl BlkIndexer {
 
 #[test]
 fn test_block_indexer() {
-    BlkIndexer::new("/Users/xuhua/btx/data").unwrap();
+    let idx = BlkIndexer::new("/levedb-dir").unwrap();
 }
 
 /// lru线程安全的区块缓存实现
+/// 取出的区块只能读取
 pub struct BlkCache {
     lru: Mutex<LruCache<IKey, Arc<Block>>>,
 }

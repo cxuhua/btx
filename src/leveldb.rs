@@ -8,38 +8,10 @@ use leveldb::iterator::LevelDBIterator;
 use leveldb::iterator::{Iterable, Iterator, RevIterator};
 use leveldb::kv::KV;
 use leveldb::options::{Options, ReadOptions, WriteOptions};
+use std::boxed::Box;
 use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::path::Path;
-/// kv数据索引存储定义
-pub trait DB: Sized {
-    /// 添加数据
-    fn put<V>(&self, _k: &IKey, _v: V, _sync: bool) -> Result<(), Error>
-    where
-        V: Serializer;
-
-    /// 获取数据
-    fn get<V>(&self, _k: &IKey) -> Option<V>
-    where
-        V: Serializer + Default;
-
-    /// 删除数据
-    fn del(&self, _k: &IKey) -> Result<(), Error>;
-
-    /// 是否存在key
-    fn has(&self, k: &IKey) -> bool;
-
-    /// KV正向迭代器
-    /// 从指定的前缀向后迭代
-    fn iter<'a>(&'a self, prefix: &'a IKey) -> Iter<'a, Iterator<'a, IKey>>;
-
-    /// KV反向迭代器
-    /// 从指定的key向前迭代
-    fn reverse<'a>(&'a self, key: &'a IKey) -> Iter<'a, RevIterator<'a, IKey>>;
-
-    /// 写入批次数据
-    fn write(&self, b: &IBatch, sync: bool) -> Result<(), Error>;
-}
 
 /// 批操作对象
 /// 写入的数据或者key长度不能超过0xFFFF
@@ -50,6 +22,7 @@ pub struct IBatch {
 
 impl IBatch {
     /// 创建批处理对象
+    /// rev=true会创建回退日志
     pub fn new(rev: bool) -> Self {
         IBatch {
             b: Writebatch::new(),
@@ -65,13 +38,32 @@ impl IBatch {
     }
     /// 删除数据并写入回退数据(如果需要)
     /// 如果v存在将v写入回退批次
-    pub fn del(&mut self, k: &IKey, v: Option<&[u8]>) {
+    pub fn del_bytes(&mut self, k: &IKey, v: Option<&[u8]>) {
+        assert!(k.len() < 0xFFFF);
         self.b.delete(k.clone());
         if v.is_none() {
             return;
         }
         if let Some(ref mut fv) = self.f {
+            assert!(v.unwrap().len() < 0xFFFF);
             fv.put(k.clone(), v.unwrap())
+        }
+    }
+    /// 删除数据并按对象序列写入(如果对象存在)
+    pub fn del<V>(&mut self, k: &IKey, v: Option<&V>)
+    where
+        V: Serializer,
+    {
+        assert!(k.len() < 0xFFFF);
+        self.b.delete(k.clone());
+        if v.is_none() {
+            return;
+        }
+        if let Some(ref mut fv) = self.f {
+            let mut wb = Writer::default();
+            v.unwrap().encode(&mut wb);
+            assert!(wb.len() < 0xFFFF);
+            fv.put(k.clone(), wb.bytes())
         }
     }
     /// 添加kv数据
@@ -183,7 +175,7 @@ impl TryFrom<&[u8]> for IBatch {
                 2u8 => {
                     let kl = r.u16()?;
                     let kb = r.get_bytes(kl as usize)?;
-                    b.del(&kb.into(), None);
+                    b.del_bytes(&kb.into(), None);
                 }
                 _ => return Error::msg("type byte error"),
             }
@@ -256,6 +248,10 @@ impl<'a> Iter<'a, RevIterator<'a, IKey>> {
         let mut r = Reader::new(&b);
         r.decode().map_or(None, |v| Some(v))
     }
+    /// 写个数据
+    pub fn next(&mut self) -> bool {
+        self.iter.advance()
+    }
     /// 按前缀key迭代所有key
     /// 直到结束或者f返回false
     /// f(第几个,当前key,当前value)
@@ -265,7 +261,7 @@ impl<'a> Iter<'a, RevIterator<'a, IKey>> {
         F: Fn(usize, &IKey, &Option<V>) -> bool,
     {
         let mut i = 0;
-        while self.iter.advance() {
+        while self.next() {
             if !f(i, &self.key(), &self.value()) {
                 break;
             }
@@ -299,6 +295,10 @@ impl<'a> Iter<'a, Iterator<'a, IKey>> {
         let mut r = Reader::new(&b);
         r.decode().map_or(None, |v| Some(v))
     }
+    /// 写个数据
+    pub fn next(&mut self) -> bool {
+        self.iter.advance()
+    }
     /// 按前缀key迭代所有key
     /// 直到结束或者f返回false
     /// f(第几个,当前key,当前value)
@@ -308,7 +308,7 @@ impl<'a> Iter<'a, Iterator<'a, IKey>> {
         F: Fn(usize, &IKey, &Option<V>) -> bool,
     {
         let mut i = 0;
-        while self.iter.advance() {
+        while self.next() {
             let pkey = self.iter.from_key();
             let key = self.key();
             if !pkey.map_or(false, |v| key.starts_with(v)) {
@@ -322,9 +322,9 @@ impl<'a> Iter<'a, Iterator<'a, IKey>> {
     }
 }
 
-impl DB for LevelDB {
-    /// 写入数据库
-    fn write(&self, b: &IBatch, sync: bool) -> Result<(), Error> {
+impl LevelDB {
+    /// 写入批量数据
+    pub fn write(&self, b: &IBatch, sync: bool) -> Result<(), Error> {
         let mut opts = WriteOptions::new();
         opts.sync = sync;
         match self.db.write(opts, &b.b) {
@@ -332,21 +332,24 @@ impl DB for LevelDB {
             Err(err) => Error::std(err),
         }
     }
-    fn iter<'a>(&'a self, prefix: &'a IKey) -> Iter<'a, Iterator<'a, IKey>> {
+    /// 正向迭代
+    pub fn iter<'a>(&'a self, prefix: &'a IKey) -> Iter<'a, Iterator<'a, IKey>> {
         let opts = ReadOptions::new();
         Iter {
             iter: Box::new(self.db.iter(opts).from(prefix)),
             marker: PhantomData,
         }
     }
-    fn reverse<'a>(&'a self, key: &'a IKey) -> Iter<'a, RevIterator<'a, IKey>> {
+    /// 反向迭代
+    pub fn reverse<'a>(&'a self, key: &'a IKey) -> Iter<'a, RevIterator<'a, IKey>> {
         let opts = ReadOptions::new();
         Iter {
             iter: Box::new(self.db.iter(opts).reverse().from(key)),
             marker: PhantomData,
         }
     }
-    fn put<V>(&self, k: &IKey, v: V, sync: bool) -> Result<(), Error>
+    /// 添加数据
+    pub fn put<V>(&self, k: &IKey, v: V, sync: bool) -> Result<(), Error>
     where
         V: Serializer,
     {
@@ -354,49 +357,36 @@ impl DB for LevelDB {
         v.encode(wb);
         let mut opts = WriteOptions::new();
         opts.sync = sync;
-        match self.db.put(opts, k, wb.bytes()) {
-            Ok(_) => Ok(()),
-            Err(err) => Error::std(err),
-        }
+        self.db
+            .put(opts, k, wb.bytes())
+            .map_or_else(Error::std, |_| Ok(()))
     }
-    fn has(&self, k: &IKey) -> bool {
+    /// 数据是否存在
+    pub fn has(&self, k: &IKey) -> bool {
         let opts = ReadOptions::new();
-        match self.db.get(opts, k) {
-            Ok(v) => v.map_or(false, |v| v.len() > 0),
-            Err(_) => false,
-        }
+        self.db
+            .get(opts, k)
+            .map_or(false, |v| v.map_or(false, |v| v.len() > 0))
     }
-    fn get<V>(&self, k: &IKey) -> Option<V>
+    /// 获取数据
+    pub fn get<V>(&self, k: &IKey) -> Option<V>
     where
         V: Serializer + Default,
     {
         let opts = ReadOptions::new();
-        match self.db.get(opts, k) {
-            Ok(v) => match v {
-                Some(v) => match Reader::new(&v).decode() {
-                    Ok(v) => Some(v),
-                    Err(_) => None,
-                },
-                None => None,
-            },
-            Err(_) => None,
-        }
+        self.db.get(opts, k).map_or(None, |v| {
+            v.map_or(None, |v| {
+                let mut r = Reader::new(&v);
+                r.decode().map_or(None, |v| Some(v))
+            })
+        })
     }
-    fn del(&self, k: &IKey) -> Result<(), Error> {
+    /// 删除数据
+    pub fn del(&self, k: &IKey, sync: bool) -> Result<(), Error> {
         let mut opts = WriteOptions::new();
-        opts.sync = false;
-        match self.db.delete(opts, k) {
-            Ok(_) => Ok(()),
-            Err(err) => Error::std(err),
-        }
+        opts.sync = sync;
+        self.db.delete(opts, k).map_or_else(Error::std, |_| Ok(()))
     }
-}
-
-struct ReverseComparator<K> {
-    marker: PhantomData<K>,
-}
-
-impl LevelDB {
     /// 指定目录打开数据库
     pub fn open(dir: &Path) -> Result<Self, Error> {
         let mut opts = Options::new();
@@ -410,6 +400,10 @@ impl LevelDB {
             Err(err) => Error::std(err),
         }
     }
+}
+
+struct ReverseComparator<K> {
+    marker: PhantomData<K>,
 }
 
 #[test]
@@ -430,7 +424,7 @@ fn test_leveldb_get_put_del() {
         assert_eq!(i, blk.header.get_ver() as u32);
     }
     for i in 1..5u32 {
-        db.del(&i.into()).unwrap();
+        db.del(&i.into(), false).unwrap();
     }
     for i in 1..5u32 {
         let ret: Option<Block> = db.get(&i.into());
