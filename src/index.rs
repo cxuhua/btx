@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(PartialEq, Eq, Clone, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
 
 ///
@@ -42,6 +42,13 @@ impl From<&[u8]> for IKey {
     }
 }
 
+/// 按高度查询区块
+impl From<&str> for IKey {
+    fn from(v: &str) -> Self {
+        IKey(v.as_bytes().to_vec())
+    }
+}
+
 ///
 impl From<Vec<u8>> for IKey {
     fn from(v: Vec<u8>) -> Self {
@@ -63,6 +70,10 @@ impl hash::Hash for IKey {
 }
 
 impl IKey {
+    //key 长度
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
     /// 获取key字节
     pub fn bytes(&self) -> &[u8] {
         &self.0
@@ -206,22 +217,16 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        match self.lru.lock() {
-            Ok(mut w) => w.put(k.into(), Arc::new(v)),
-            _ => panic!("lock failed"),
-        }
+        self.lru.lock().unwrap().put(k.into(), Arc::new(v))
     }
     /// 从缓存获取值,不改变缓存状态
     pub fn peek<K, F>(&self, k: K) -> Option<Arc<Block>>
     where
         K: Into<IKey>,
     {
-        match self.lru.lock() {
-            Ok(w) => match w.peek(&k.into()) {
-                Some(v) => Some(v.clone()),
-                _ => None,
-            },
-            _ => panic!("lock failed"),
+        match self.lru.lock().unwrap().peek(&k.into()) {
+            Some(v) => Some(v.clone()),
+            _ => None,
         }
     }
 
@@ -230,10 +235,7 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        match self.lru.lock() {
-            Ok(w) => w.contains(&k.into()),
-            _ => panic!("lock failed"),
-        }
+        self.lru.lock().unwrap().contains(&k.into())
     }
 
     /// 从缓存移除数据
@@ -241,10 +243,7 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        match self.lru.lock() {
-            Ok(mut w) => w.pop(&k.into()),
-            _ => panic!("lock failed"),
-        }
+        self.lru.lock().unwrap().pop(&k.into())
     }
 
     /// 从缓存获取值并复制返回
@@ -253,12 +252,9 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        match self.lru.lock() {
-            Ok(mut w) => match w.get(&k.into()) {
-                Some(v) => Some(v.clone()),
-                _ => None,
-            },
-            _ => panic!("lock failed"),
+        match self.lru.lock().unwrap().get(&k.into()) {
+            Some(v) => Some(v.clone()),
+            _ => None,
         }
     }
 }
