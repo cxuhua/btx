@@ -1,18 +1,22 @@
 use crate::block::Block;
+use crate::bytes::IntoBytes;
+use crate::errors::Error;
 use crate::hasher::Hasher;
 use bytes::BufMut;
 use core::hash;
 use db_key::Key;
 use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
+use std::convert::Into;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
-use crate::bytes::IntoBytes;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
 
-/// 
+///
 impl Key for IKey {
     fn from_u8(key: &[u8]) -> IKey {
         IKey(key.to_vec())
@@ -89,11 +93,87 @@ pub trait Indexer: Sized {
     fn cache(&self) -> Option<&BlkCache>;
 }
 
+pub struct BlkIndexer {
+    root: String,    //数据根目录
+    entry: String,   //入口数据库
+    block: String,   //内容存储
+    index: String,   //索引目录
+    cache: BlkCache, //缓存
+}
+
+impl Indexer for BlkIndexer {
+    fn get<K>(&self, k: K) -> Option<Arc<Block>>
+    where
+        K: Into<IKey>,
+    {
+        //如果缓存中存在
+        if let Some(v) = self.cache.get(k) {
+            return Some(v);
+        }
+        //从数据库查询并加入缓存
+        None
+    }
+    fn cache(&self) -> Option<&BlkCache> {
+        None
+    }
+}
+
 /// 数据文件分布说明
 /// data  --- 数据根目录
 ///       --- entry 入口索引文件 leveldb
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
+impl BlkIndexer {
+    /// 如果目录不存在直接创建
+    fn miss_create_dir(&self, dir: &str) -> Result<(), Error> {
+        let p = Path::new(dir);
+        //目录是否存在
+        let has = match fs::metadata(p).map(|v| v.is_dir()) {
+            Ok(v) => v,
+            _ => false,
+        };
+        if has {
+            return Ok(());
+        }
+        match fs::create_dir(&p) {
+            Ok(_) => Ok(()),
+            Err(err) => Error::std(err),
+        }
+    }
+    /// 初始化
+    fn init(&self) -> Result<(), Error> {
+        //root dir
+        self.miss_create_dir(&self.root)?;
+        //entry dir
+        self.miss_create_dir(&self.entry)?;
+        //block dir
+        self.miss_create_dir(&self.block)?;
+        //index dir
+        self.miss_create_dir(&self.index)?;
+        //entry leveldb
+        //block store
+        //index leveldb
+        Ok(())
+    }
+
+    /// 创建存储索引
+    pub fn new(dir: &str) -> Result<Self, Error> {
+        let indexer = BlkIndexer {
+            root: String::from(dir),
+            entry: String::from(dir) + "/entry",
+            block: String::from(dir) + "/block",
+            index: String::from(dir) + "/index",
+            cache: BlkCache::default(),
+        };
+        indexer.init()?;
+        Ok(indexer)
+    }
+}
+
+#[test]
+fn test_block_indexer() {
+    BlkIndexer::new("/Users/xuhua/btx/data").unwrap();
+}
 
 /// lru线程安全的区块缓存实现
 pub struct BlkCache {
