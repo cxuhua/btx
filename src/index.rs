@@ -206,10 +206,8 @@ impl BlkCache {
     }
     /// 获取缓存长度
     pub fn len(&self) -> usize {
-        match self.lru.lock() {
-            Ok(w) => w.len(),
-            _ => panic!("lock failed"),
-        }
+        let wl = self.lru.lock().unwrap();
+        wl.len()
     }
     /// 加入缓存值
     /// 如果存在将返回旧值
@@ -217,17 +215,16 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        self.lru.lock().unwrap().put(k.into(), Arc::new(v))
+        let mut wl = self.lru.lock().unwrap();
+        wl.put(k.into(), Arc::new(v))
     }
     /// 从缓存获取值,不改变缓存状态
     pub fn peek<K, F>(&self, k: K) -> Option<Arc<Block>>
     where
         K: Into<IKey>,
     {
-        match self.lru.lock().unwrap().peek(&k.into()) {
-            Some(v) => Some(v.clone()),
-            _ => None,
-        }
+        let wl = self.lru.lock().unwrap();
+        wl.peek(&k.into()).map(|v| v.clone())
     }
 
     /// 检测指定的key是否存在
@@ -235,7 +232,8 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        self.lru.lock().unwrap().contains(&k.into())
+        let wl = self.lru.lock().unwrap();
+        wl.contains(&k.into())
     }
 
     /// 从缓存移除数据
@@ -243,7 +241,8 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        self.lru.lock().unwrap().pop(&k.into())
+        let mut wl = self.lru.lock().unwrap();
+        wl.pop(&k.into())
     }
 
     /// 从缓存获取值并复制返回
@@ -252,10 +251,8 @@ impl BlkCache {
     where
         K: Into<IKey>,
     {
-        match self.lru.lock().unwrap().get(&k.into()) {
-            Some(v) => Some(v.clone()),
-            _ => None,
-        }
+        let mut wl = self.lru.lock().unwrap();
+        wl.get(&k.into()).map(|v| v.clone())
     }
 }
 
