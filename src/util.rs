@@ -1,5 +1,24 @@
 use crate::consts;
+use crate::errors::Error;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use std::fs;
+use std::path::Path;
+
+pub fn miss_create_dir(dir: &str) -> Result<(), Error> {
+    let p = Path::new(dir);
+    //目录是否存在
+    let has = match fs::metadata(p).map(|v| v.is_dir()) {
+        Ok(v) => v,
+        _ => false,
+    };
+    if has {
+        return Ok(());
+    }
+    match fs::create_dir(&p) {
+        Ok(_) => Ok(()),
+        Err(err) => Error::std(err),
+    }
+}
 
 /// 获取当前时间戳
 /// 2020-01-01 00:00:00 UTC 开始至今的秒数

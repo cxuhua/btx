@@ -3,13 +3,13 @@ use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::leveldb::LevelDB;
+use crate::util;
 use bytes::BufMut;
 use core::hash;
 use db_key::Key;
 use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
 use std::convert::Into;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -94,7 +94,13 @@ impl IKey {
     }
 }
 
-/// 区块索引
+/// 区块链存储索引
+/// 优先从缓存获取,失败从数据库获取
+pub trait Indexer: Sized {
+    /// 根据k获取区块
+    fn get(&self, _k: &IKey) -> Option<Arc<Block>>;
+}
+
 pub struct BlkIndexer {
     root: String,    //数据根目录
     block: String,   //内容存储
@@ -103,13 +109,9 @@ pub struct BlkIndexer {
     idxdb: LevelDB,  //索引数据库指针
 }
 
-/// 数据文件分布说明
-/// data  --- 数据根目录
-///       --- block 区块内容目录 store存储
-///       --- index 索引目录,金额记录,区块头 leveldb
-impl BlkIndexer {
+impl Indexer for BlkIndexer {
     /// 从索引中获取区块
-    pub fn get(&self, k: &IKey) -> Option<Arc<Block>> {
+    fn get(&self, k: &IKey) -> Option<Arc<Block>> {
         //如果缓存中存在
         if let Some(v) = self.cache.get(k) {
             return Some(v);
@@ -125,23 +127,19 @@ impl BlkIndexer {
         //
         Some(Arc::new(blk))
     }
-    /// 如果目录不存在直接创建
-    fn miss_create_dir(dir: &str) -> Result<(), Error> {
-        let p = Path::new(dir);
-        if fs::metadata(p).map_or(false, |v| v.is_dir()) {
-            return Ok(());
-        }
-        match fs::create_dir(&p) {
-            Ok(_) => Ok(()),
-            Err(err) => Error::std(err),
-        }
-    }
+}
+
+/// 数据文件分布说明
+/// data  --- 数据根目录
+///       --- block 区块内容目录 store存储
+///       --- index 索引目录,金额记录,区块头 leveldb
+impl BlkIndexer {
     /// 创建存储索引
-    pub fn open(dir: &str) -> Result<Self, Error> {
+    pub fn new(dir: &str) -> Result<Self, Error> {
         let idxpath = String::from(dir) + "/index";
-        Self::miss_create_dir(&idxpath)?;
+        util::miss_create_dir(&idxpath)?;
         let blkpath = String::from(dir) + "/block";
-        Self::miss_create_dir(&blkpath)?;
+        util::miss_create_dir(&blkpath)?;
         Ok(BlkIndexer {
             root: String::from(dir),
             block: blkpath.clone(),
@@ -154,11 +152,10 @@ impl BlkIndexer {
 
 #[test]
 fn test_block_indexer() {
-    let idx = BlkIndexer::open("/levedb-dir").unwrap();
+    BlkIndexer::new("./data").unwrap();
 }
 
 /// lru线程安全的区块缓存实现
-/// 取出的区块只能读取
 pub struct BlkCache {
     lru: Mutex<LruCache<IKey, Arc<Block>>>,
 }
