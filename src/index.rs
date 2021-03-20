@@ -3,6 +3,7 @@ use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::leveldb::LevelDB;
+use crate::store::Store;
 use crate::util;
 use bytes::BufMut;
 use core::hash;
@@ -102,11 +103,13 @@ pub trait Indexer: Sized {
 }
 
 pub struct BlkIndexer {
-    root: String,    //数据根目录
-    block: String,   //内容存储
-    index: String,   //索引目录
-    cache: BlkCache, //缓存
-    idxdb: LevelDB,  //索引数据库指针
+    root: String,      //数据根目录
+    block: String,     //内容存储
+    index: String,     //索引目录
+    cache: BlkCache,   //缓存
+    idx: LevelDB,      //索引数据库指针
+    blk: Mutex<Store>, //区块存储索引
+    rev: Mutex<Store>, //回退日志存储索引
 }
 
 impl Indexer for BlkIndexer {
@@ -117,7 +120,7 @@ impl Indexer for BlkIndexer {
             return Some(v);
         }
         //从数据库查询并加入缓存
-        let v: Option<Block> = self.idxdb.get(k);
+        let v: Option<Block> = self.idx.get(k);
         if v.is_none() {
             return None;
         }
@@ -134,6 +137,7 @@ impl Indexer for BlkIndexer {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
+    const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
     /// 创建存储索引
     pub fn new(dir: &str) -> Result<Self, Error> {
         let idxpath = String::from(dir) + "/index";
@@ -145,8 +149,15 @@ impl BlkIndexer {
             block: blkpath.clone(),
             index: idxpath.clone(),
             cache: BlkCache::default(),
-            idxdb: LevelDB::open(Path::new(&idxpath))?,
+            idx: LevelDB::open(Path::new(&idxpath))?,
+            blk: Mutex::new(Store::new(dir, "blk", Self::MAX_FILE_SIZE)?),
+            rev: Mutex::new(Store::new(dir, "rev", Self::MAX_FILE_SIZE)?),
         })
+    }
+    pub fn write(&self, blk: &[u8], rev: &[u8]) -> Result<(), Error> {
+        self.blk.lock().unwrap().push(blk)?;
+        self.rev.lock().unwrap().push(rev)?;
+        Ok(())
     }
 }
 

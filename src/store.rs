@@ -264,13 +264,10 @@ impl Store {
         self.cache.iter().filter(|v| v.idx == idx).next()
     }
     /// 检测是否切换到下个文件
-    /// 返回写入前的长度
-    /// path:路径
-    /// ext:文件扩展
-    /// max_file_size:单个文件最大存储字节
+    /// 返回写入前的位置
     fn check_next(&mut self, l: u32) -> Result<u32, Error> {
         if l > self.max {
-            return Error::msg("max must > max push len");
+            return Error::msg("max must > push bytes len");
         }
         let dir = Path::new(&self.dir);
         //获取当前写入文件
@@ -312,17 +309,17 @@ impl Store {
     }
     /// 追加写入数据
     /// 返回写入前的文件长度
-    pub fn push(&mut self, b: &[u8]) -> Result<u32, Error> {
+    pub fn push(&mut self, b: &[u8]) -> Result<Attr, Error> {
         let pos = self.check_next(b.len() as u32)?;
         let sf = self
             .cache_file(self.idx)
             .map_or(Error::msg("not found"), |v| Ok(v))?;
         sf.append(b)?;
-        Ok(pos)
-    }
-    /// 返回当前写入的文件索引
-    pub fn index(&self) -> u32 {
-        self.idx
+        Ok(Attr {
+            idx: self.idx,
+            off: pos,
+            size: b.len() as u32,
+        })
     }
     /// 读取buf指定大小的数据
     pub fn read(&mut self, i: u32, p: u32, buf: &mut [u8]) -> Result<(), Error> {
@@ -369,13 +366,4 @@ fn test_store() {
 
     assert_eq!(1, store.cache.len());
     assert_eq!(0, store.idx);
-}
-
-#[test]
-fn test_tmp_block() {
-    let mut store = Store::new("./tmp/block", "blk", 15).unwrap();
-    for _ in 0..10 {
-        let pos = store.push(&[1u8, 2, 3]).unwrap();
-        println!("{:?}", pos);
-    }
 }
