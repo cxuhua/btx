@@ -152,7 +152,7 @@ impl BlkIndexer {
 
 #[test]
 fn test_block_indexer() {
-    BlkIndexer::new("./data").unwrap();
+    BlkIndexer::new("./tmp").unwrap();
 }
 
 /// lru线程安全的区块缓存实现

@@ -3,9 +3,7 @@ use crate::iobuf::{Reader, Serializer, Writer};
 use crate::util;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::path::{Path, PathBuf};
 
 /// 区块存储属性
 pub struct Attr {
@@ -75,20 +73,28 @@ struct StoreFile {
 }
 
 impl StoreFile {
+    /// 存储文件路径
+    fn store_file_path(dir: &Path, idx: u32, ext: &str) -> PathBuf {
+        dir.join(format!("{:08}.{}", idx, ext))
+    }
+    /// 创建存储文件
+    fn new(idx: u32, fs: fs::File) -> Self {
+        StoreFile { idx: idx, file: fs }
+    }
     /// 获取初始文件
     /// 从当前目录搜索最后一个文件，如果文件大于最大
     /// 创建下一个文件返回
     /// path:路径
     /// ext:文件扩展
     /// max_file_size:单个文件最大存储字节
-    fn init_file(path: &str, ext: &str, max_file_size: u64) -> Result<Self, Error> {
+    fn init_file(path: &str, ext: &str, max_file_size: u32) -> Result<Self, Error> {
         let dir = Path::new(path);
         let reader = fs::read_dir(dir);
         if let Err(err) = reader {
             return Error::std(err);
         }
         let reader = &mut reader.unwrap();
-        let mut max = 0;
+        let mut max = 0u32;
         for item in reader {
             if item.is_err() {
                 continue;
@@ -110,68 +116,56 @@ impl StoreFile {
                 }
             }
         }
-        let last = dir.join(format!("{:08}.{}", max, ext));
-        if fs::metadata(&last).map_or(0, |v| v.len()) > max_file_size {
+        let last = Self::store_file_path(dir, max, ext);
+        if fs::metadata(&last).map_or(0, |v| v.len() as u32) > max_file_size {
             max += 1;
         }
-        let last = dir.join(format!("{:08}.{}", max, ext));
-        let mut opts = fs::OpenOptions::new();
-        opts.append(true)
+        //打开下个文件
+        let last = Self::store_file_path(dir, max, ext);
+        fs::OpenOptions::new()
+            .append(true)
             .read(true)
             .create(true)
             .open(&last)
-            .map_or_else(Error::std, |v| Ok(StoreFile { idx: max, file: v }))
+            .map_or_else(Error::std, |v| Ok(StoreFile::new(max, v)))
     }
-    /// 检测是否切换到下个文件-
-    /// 返回下个文件的编码
-    /// path:路径
-    /// ext:文件扩展
-    /// max_file_size:单个文件最大存储字节
-    fn check_next(&mut self, path: &str, ext: &str, max_file_size: u64) -> Result<u32, Error> {
+    fn metadata(&self) -> Result<fs::Metadata, Error> {
+        self.file.metadata().map_or_else(Error::std, |v| Ok(v))
+    }
+    //打开只读的文件存储
+    fn open_only_read(idx: u32, path: &str, ext: &str) -> Result<Self, Error> {
         let dir = Path::new(path);
-        let meta = self.file.metadata().map_or_else(Error::std, |v| Ok(v))?;
-        if meta.len() <= max_file_size {
-            return Ok(self.idx);
-        }
-        self.idx += 1;
-        let last = dir.join(format!("{:08}.{}", self.idx, ext));
-        let mut opts = fs::OpenOptions::new();
-        opts.append(true)
+        let last = Self::store_file_path(dir, idx, ext);
+        fs::OpenOptions::new()
             .read(true)
-            .create(true)
             .open(&last)
-            .map_or_else(Error::std, |v| {
-                self.file = v;
-                Ok(self.idx)
-            })
+            .map_or_else(Error::std, |v| Ok(StoreFile::new(idx, v)))
     }
     /// 同步数据到磁盘
-    fn sync(&mut self) -> Result<(), Error> {
+    fn sync(&self) -> Result<(), Error> {
         self.file.sync_data().map_or_else(Error::std, |_| Ok(()))
     }
     /// 获取当前文件指针
-    fn pos(&mut self) -> Result<u64, Error> {
-        self.file
-            .seek(SeekFrom::Current(0))
+    fn pos(&self) -> Result<u64, Error> {
+        let file = &mut &self.file;
+        file.seek(SeekFrom::Current(0))
             .map_or_else(Error::std, |v| Ok(v))
     }
     /// 移动文件指针到指定位置
-    fn seek(&mut self, pos: u64) -> Result<u64, Error> {
-        self.file
-            .seek(SeekFrom::Start(pos))
+    fn seek(&self, pos: u64) -> Result<u64, Error> {
+        let file = &mut &self.file;
+        file.seek(SeekFrom::Start(pos))
             .map_or_else(Error::std, |v| Ok(v))
     }
     /// 追加写入所有数据,seek不会改变写入的位置,只会写入文件末尾
     /// 写完后读写指针移动到危机末尾
     /// 返回实际写入的长度
-    fn write(&mut self, b: &[u8]) -> Result<usize, Error> {
+    fn append(&self, b: &[u8]) -> Result<usize, Error> {
+        let file = &mut &self.file;
         let mut p = 0;
         let l = b.len();
         while l - p > 0 {
-            let wl = self
-                .file
-                .write(&b[p..l])
-                .map_or_else(Error::std, |v| Ok(v))?;
+            let wl = file.write(&b[p..l]).map_or_else(Error::std, |v| Ok(v))?;
             if wl <= 0 {
                 return Error::msg("write error");
             }
@@ -181,12 +175,12 @@ impl StoreFile {
     }
     /// 读取所有数据
     /// 返回实际读取的长度
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        let file = &mut &self.file;
         let mut p = 0;
         let l = buf.len();
         while l - p > 0 {
-            let rl = self
-                .file
+            let rl = file
                 .read(&mut buf[p..l])
                 .map_or_else(Error::std, |v| Ok(v))?;
             if rl <= 0 {
@@ -196,33 +190,6 @@ impl StoreFile {
         }
         Ok(p)
     }
-}
-
-#[test]
-fn test_check_next_file() {
-    use tempdir::TempDir;
-    let tmp = TempDir::new("store").unwrap();
-    let dir = tmp.path().to_str().unwrap();
-    for i in 0..1 {
-        let n = format!("{}/{:08}.log", dir, i);
-        fs::File::create(Path::new(&n)).unwrap();
-    }
-    let fs = &mut StoreFile::init_file(dir, "log", 3).unwrap();
-    assert_eq!(0, fs.idx);
-    fs.write("1234".as_bytes()).unwrap();
-    fs.sync().unwrap();
-    fs.check_next(dir, "log", 3).unwrap();
-    assert_eq!(1, fs.idx);
-
-    fs.write("1234".as_bytes()).unwrap();
-    fs.sync().unwrap();
-    fs.check_next(dir, "log", 3).unwrap();
-    assert_eq!(2, fs.idx);
-
-    fs.write("1234".as_bytes()).unwrap();
-    fs.sync().unwrap();
-    fs.check_next(dir, "log", 3).unwrap();
-    assert_eq!(3, fs.idx);
 }
 
 #[test]
@@ -237,11 +204,11 @@ fn test_store_file() {
     let fs = &mut StoreFile::init_file(dir, "log", 1024).unwrap();
     assert_eq!(31, fs.idx);
     assert_eq!(true, fs.file.metadata().unwrap().is_file());
-    fs.write("12345678".as_bytes()).unwrap();
+    fs.append("12345678".as_bytes()).unwrap();
     assert_eq!(8, fs.pos().unwrap());
     fs.seek(0).unwrap();
     assert_eq!(0, fs.pos().unwrap());
-    fs.write("87654321".as_bytes()).unwrap();
+    fs.append("87654321".as_bytes()).unwrap();
     assert_eq!(16, fs.pos().unwrap());
     fs.seek(0).unwrap();
     let mut buf = [0u8; 16];
@@ -253,29 +220,181 @@ fn test_store_file() {
 /// 区块数据和回退数据存储
 /// .blk 存储区块内容 .rev 存储回退数据
 pub struct Store {
-    dir: String,             //存储目录
-    ext: String,             //文件后缀
-    file: RwLock<StoreFile>, //当前写入文件
+    idx: u32,
+    max: u32,
+    dir: String, //存储目录
+    ext: String, //文件后缀
+    cache: Vec<StoreFile>,
 }
 
 impl Store {
-    const FILE_MAX_SIZE: u64 = 1024 * 1024 * 512;
-    //获取最后一个文件
-    fn last_file() -> Result<StoreFile, Error> {
-        Error::msg("not imp")
+    const MAX_CACHE_FILE: usize = 16;
+    ///  移除idx最小的那个
+    /// 不移除当前写入文件
+    fn remove_file(&mut self) {
+        let mut rmin = u32::MAX;
+        let mut ridx = usize::MAX;
+        for i in 0..self.cache.len() {
+            let file = &self.cache[i];
+            //不移除ref前写入文件
+            if file.idx == self.idx {
+                continue;
+            }
+            //获取最小的文件索引
+            if file.idx < rmin {
+                rmin = file.idx;
+                ridx = i;
+            }
+        }
+        if ridx != usize::MAX {
+            self.cache.remove(ridx);
+        }
+    }
+    /// 打开新文件
+    fn open_file(&mut self, idx: u32) -> Result<&StoreFile, Error> {
+        let fs = StoreFile::open_only_read(idx, &self.dir, &self.dir)?;
+        self.cache.push(fs);
+        if self.cache.len() > Self::MAX_CACHE_FILE {
+            self.remove_file();
+        }
+        Ok(self.cache.last().unwrap())
+    }
+    /// 获取缓存文件
+    fn cache_file(&self, idx: u32) -> Option<&StoreFile> {
+        self.cache.iter().filter(|v| v.idx == idx).next()
+    }
+    /// 检测是否切换到下个文件
+    /// 返回写入前的长度
+    /// path:路径
+    /// ext:文件扩展
+    /// max_file_size:单个文件最大存储字节
+    fn check_next(&mut self, l: u32) -> Result<u32, Error> {
+        let dir = Path::new(&self.dir);
+        //获取当前写入文件
+        let sf = self
+            .cache_file(self.idx)
+            .map_or(Error::msg("not found cache file"), |v| Ok(v))?;
+        //检测文件大小,能写入就返回当前文件位置
+        let pos = sf.metadata()?.len() as u32;
+        if (pos + l) <= self.max as u32 {
+            return Ok(pos);
+        }
+        //创建下一个文件
+        let last = StoreFile::store_file_path(dir, self.idx + 1, &self.ext);
+        fs::OpenOptions::new()
+            .append(true)
+            .read(true)
+            .create(true)
+            .open(&last)
+            .map_or_else(Error::std, |file| {
+                self.idx += 1;
+                let sf = StoreFile::new(self.idx, file);
+                self.cache.push(sf);
+                //新创建的从0开始
+                Ok(0)
+            })
     }
     /// 创建区块存储器
-    pub fn new(dir: &str, ext: &str) -> Result<Self, Error> {
+    pub fn new(dir: &str, ext: &str, max: u32) -> Result<Self, Error> {
         let dir: String = dir.into();
         util::miss_create_dir(&dir)?;
+        let sf = StoreFile::init_file(&dir, ext, max)?;
         Ok(Store {
+            idx: sf.idx,
+            max: max,
             dir: dir,
             ext: ext.into(),
-            file: RwLock::new(Self::last_file()?),
+            cache: vec![sf],
         })
+    }
+    /// 追加写入数据
+    /// 返回写入前的文件长度
+    pub fn push(&mut self, b: &[u8]) -> Result<u32, Error> {
+        let pos = self.check_next(b.len() as u32)?;
+        let sf = self
+            .cache_file(self.idx)
+            .map_or(Error::msg("not found"), |v| Ok(v))?;
+        sf.append(b)?;
+        Ok(pos)
+    }
+    /// 返回当前写入的文件索引
+    pub fn index(&self) -> u32 {
+        self.idx
+    }
+    /// 读取buf指定大小的数据
+    pub fn read(&mut self, i: u32, p: u32, buf: &mut [u8]) -> Result<(), Error> {
+        let sf: &StoreFile;
+        if let Some(v) = self.cache_file(i) {
+            sf = v;
+        } else if let Ok(v) = self.open_file(i) {
+            sf = v;
+        } else {
+            return Error::msg("open file error");
+        }
+        sf.seek(p as u64)?;
+        sf.read(buf)?;
+        Ok(())
+    }
+    /// 读取数据
+    /// i文件, p读取位置, l读取长度
+    pub fn pull(&mut self, i: u32, p: u32, l: u32) -> Result<Vec<u8>, Error> {
+        let sf: &StoreFile;
+        if let Some(v) = self.cache_file(i) {
+            sf = v;
+        } else if let Ok(v) = self.open_file(i) {
+            sf = v;
+        } else {
+            return Error::msg("open file error");
+        }
+        let mut buf = vec![0u8; l as usize];
+        sf.seek(p as u64)?;
+        sf.read(&mut buf)?;
+        Ok(buf)
     }
 }
 #[test]
 fn test_store() {
-    let store = Store::new("./data/block", "blk");
+    use tempdir::TempDir;
+    let tmp = TempDir::new("store").unwrap();
+    let dir = tmp.path().to_str().unwrap();
+    let mut store = Store::new(dir, "blk", 10).unwrap();
+    store
+        .push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        .unwrap();
+    let buf = store.pull(0, 0, 12).unwrap();
+    assert_eq!(&buf, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+    //已经移动下个文件
+    assert_eq!(2, store.cache.len());
+    assert_eq!(1, store.idx);
+
+    store
+        .push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        .unwrap();
+
+    let buf = store.pull(1, 0, 12).unwrap();
+    assert_eq!(&buf, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+    let buf = store.pull(1, 5, 7).unwrap();
+    assert_eq!(&buf, &[6u8, 7, 8, 9, 10, 11, 12]);
+
+    //已经移动下个文件
+    assert_eq!(3, store.cache.len());
+    assert_eq!(2, store.idx);
+
+    store.push(&[1u8, 2, 3, 4]).unwrap();
+    let buf = store.pull(2, 0, 4).unwrap();
+    assert_eq!(&buf, &[1u8, 2, 3, 4]);
+
+    assert_eq!(3, store.cache.len());
+    assert_eq!(2, store.idx);
+}
+
+#[test]
+fn test_tmp_block() {
+    let mut store = Store::new("./tmp/block", "blk", 15).unwrap();
+    for _ in 0..10 {
+        let pos = store.push(&[1u8, 2, 3]).unwrap();
+        println!("{:?}", pos);
+    }
 }
