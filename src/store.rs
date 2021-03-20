@@ -269,6 +269,9 @@ impl Store {
     /// ext:文件扩展
     /// max_file_size:单个文件最大存储字节
     fn check_next(&mut self, l: u32) -> Result<u32, Error> {
+        if l > self.max {
+            return Error::msg("max must > max push len");
+        }
         let dir = Path::new(&self.dir);
         //获取当前写入文件
         let sf = self
@@ -357,37 +360,15 @@ fn test_store() {
     use tempdir::TempDir;
     let tmp = TempDir::new("store").unwrap();
     let dir = tmp.path().to_str().unwrap();
-    let mut store = Store::new(dir, "blk", 10).unwrap();
+    let mut store = Store::new(dir, "blk", 30).unwrap();
     store
         .push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
         .unwrap();
     let buf = store.pull(0, 0, 12).unwrap();
     assert_eq!(&buf, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
-    //已经移动下个文件
-    assert_eq!(2, store.cache.len());
-    assert_eq!(1, store.idx);
-
-    store
-        .push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
-        .unwrap();
-
-    let buf = store.pull(1, 0, 12).unwrap();
-    assert_eq!(&buf, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-
-    let buf = store.pull(1, 5, 7).unwrap();
-    assert_eq!(&buf, &[6u8, 7, 8, 9, 10, 11, 12]);
-
-    //已经移动下个文件
-    assert_eq!(3, store.cache.len());
-    assert_eq!(2, store.idx);
-
-    store.push(&[1u8, 2, 3, 4]).unwrap();
-    let buf = store.pull(2, 0, 4).unwrap();
-    assert_eq!(&buf, &[1u8, 2, 3, 4]);
-
-    assert_eq!(3, store.cache.len());
-    assert_eq!(2, store.idx);
+    assert_eq!(1, store.cache.len());
+    assert_eq!(0, store.idx);
 }
 
 #[test]
