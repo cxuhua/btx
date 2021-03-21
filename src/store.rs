@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 /// 区块存储属性
+#[derive(Debug, PartialEq)]
 pub struct Attr {
     pub idx: u32,  //所在文件
     pub off: u32,  //文件偏移
@@ -263,6 +264,11 @@ impl Store {
     fn cache_file(&self, idx: u32) -> Option<&StoreFile> {
         self.cache.iter().filter(|v| v.idx == idx).next()
     }
+    /// 获取当前最大的写入文件
+    fn curr_file(&self) -> Result<&StoreFile, Error> {
+        self.cache_file(self.idx)
+            .map_or(Error::msg("not found max file"), |v| Ok(v))
+    }
     /// 检测是否切换到下个文件
     /// 返回写入前的位置
     fn check_next(&mut self, l: u32) -> Result<u32, Error> {
@@ -271,27 +277,24 @@ impl Store {
         }
         let dir = Path::new(&self.dir);
         //获取当前写入文件
-        let sf = self
-            .cache_file(self.idx)
-            .map_or(Error::msg("not found cache file"), |v| Ok(v))?;
+        let sf = self.curr_file()?;
         //检测文件大小,能写入就返回当前文件位置
         let pos = sf.metadata()?.len() as u32;
         if (pos + l) <= self.max as u32 {
             return Ok(pos);
         }
         //创建下一个文件
-        let last = StoreFile::store_file_path(dir, self.idx + 1, &self.ext);
+        let next = StoreFile::store_file_path(dir, self.idx + 1, &self.ext);
         fs::OpenOptions::new()
             .append(true)
             .read(true)
             .create(true)
-            .open(&last)
+            .open(&next)
             .map_or_else(Error::std, |file| {
                 self.idx += 1;
                 let sf = StoreFile::new(self.idx, file);
                 self.cache.push(sf);
-                //新创建的从0开始
-                Ok(0)
+                Ok(0) //新创建的从0开始
             })
     }
     /// 创建区块存储器
@@ -310,15 +313,17 @@ impl Store {
     /// 追加写入数据
     /// 返回写入前的文件长度
     pub fn push(&mut self, b: &[u8]) -> Result<Attr, Error> {
-        let pos = self.check_next(b.len() as u32)?;
-        let sf = self
-            .cache_file(self.idx)
-            .map_or(Error::msg("not found"), |v| Ok(v))?;
+        let bl = b.len() as u32;
+        if bl == 0 {
+            return Error::msg("push empty data");
+        }
+        let pos = self.check_next(bl)?;
+        let sf = self.curr_file()?;
         sf.append(b)?;
         Ok(Attr {
             idx: self.idx,
             off: pos,
-            size: b.len() as u32,
+            size: bl,
         })
     }
     /// 读取buf指定大小的数据
@@ -358,12 +363,28 @@ fn test_store() {
     let tmp = TempDir::new("store").unwrap();
     let dir = tmp.path().to_str().unwrap();
     let mut store = Store::new(dir, "blk", 30).unwrap();
-    store
+    let attr = store
         .push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
         .unwrap();
+    assert_eq!(
+        attr,
+        Attr {
+            idx: 0,
+            off: 0,
+            size: 12
+        }
+    );
+    let attr = store.push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10]).unwrap();
+    assert_eq!(
+        attr,
+        Attr {
+            idx: 0,
+            off: 12,
+            size: 10
+        }
+    );
     let buf = store.pull(0, 0, 12).unwrap();
     assert_eq!(&buf, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-
     assert_eq!(1, store.cache.len());
     assert_eq!(0, store.idx);
 }
