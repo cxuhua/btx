@@ -72,7 +72,7 @@ impl hash::Hash for IKey {
 }
 
 impl IKey {
-    //key 长度
+    /// key 长度
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -89,7 +89,7 @@ impl IKey {
     pub fn empty() -> Self {
         "".as_bytes().into()
     }
-    //失败包含前缀
+    /// 是否包含前缀
     pub fn starts_with(&self, prefix: &IKey) -> bool {
         self.0.starts_with(&prefix.0)
     }

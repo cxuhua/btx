@@ -13,6 +13,13 @@ pub struct Attr {
     pub size: u32, //文件大小
 }
 
+impl Attr {
+    /// 是否有效
+    pub fn is_valid(&self) -> bool {
+        self.size > 0
+    }
+}
+
 impl Default for Attr {
     fn default() -> Self {
         Attr {
@@ -38,31 +45,6 @@ impl Serializer for Attr {
         attr.off = r.u32()?;
         attr.size = r.u32()?;
         Ok(attr)
-    }
-}
-
-/// 文件头
-pub struct Header {
-    pub ver: u32, //版本
-}
-
-impl Default for Header {
-    fn default() -> Self {
-        Header { ver: 1 }
-    }
-}
-
-impl Serializer for Header {
-    fn encode(&self, w: &mut Writer) {
-        w.u32(self.ver);
-    }
-    fn decode(r: &mut Reader) -> Result<Self, Error>
-    where
-        Self: Default,
-    {
-        let mut v = Header::default();
-        v.ver = r.u32()?;
-        Ok(v)
     }
 }
 
@@ -96,10 +78,7 @@ impl StoreFile {
         }
         let reader = &mut reader.unwrap();
         let mut max = 0u32;
-        for item in reader {
-            if item.is_err() {
-                continue;
-            }
+        for item in reader.filter(|v| v.is_ok()) {
             let item = item.unwrap();
             //是否是文件
             if !item.file_type().map_or(false, |v| v.is_file()) {
@@ -148,13 +127,13 @@ impl StoreFile {
     }
     /// 获取当前文件指针
     fn pos(&self) -> Result<u64, Error> {
-        let file = &mut &self.file;
+        let ref mut file = &self.file;
         file.seek(SeekFrom::Current(0))
             .map_or_else(Error::std, |v| Ok(v))
     }
     /// 移动文件指针到指定位置
     fn seek(&self, pos: u64) -> Result<u64, Error> {
-        let file = &mut &self.file;
+        let ref mut file = &self.file;
         file.seek(SeekFrom::Start(pos))
             .map_or_else(Error::std, |v| Ok(v))
     }
@@ -162,7 +141,7 @@ impl StoreFile {
     /// 写完后读写指针移动到危机末尾
     /// 返回实际写入的长度
     fn append(&self, b: &[u8]) -> Result<usize, Error> {
-        let file = &mut &self.file;
+        let ref mut file = &self.file;
         let mut p = 0;
         let l = b.len();
         while l - p > 0 {
@@ -177,7 +156,7 @@ impl StoreFile {
     /// 读取所有数据
     /// 返回实际读取的长度
     fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        let file = &mut &self.file;
+        let ref mut file = &self.file;
         let mut p = 0;
         let l = buf.len();
         while l - p > 0 {
@@ -358,7 +337,7 @@ impl Store {
     }
 }
 #[test]
-fn test_store() {
+fn test_all_store() {
     use tempdir::TempDir;
     let tmp = TempDir::new("store").unwrap();
     let dir = tmp.path().to_str().unwrap();
