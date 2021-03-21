@@ -28,7 +28,6 @@ impl Key for IKey {
     }
 }
 
-/// 按高度查询区块
 impl From<u32> for IKey {
     fn from(v: u32) -> Self {
         let mut key = IKey(vec![]);
@@ -37,14 +36,12 @@ impl From<u32> for IKey {
     }
 }
 
-/// 按高度查询区块
 impl From<&[u8]> for IKey {
     fn from(v: &[u8]) -> Self {
         IKey(v.to_vec())
     }
 }
 
-/// 按高度查询区块
 impl From<&str> for IKey {
     fn from(v: &str) -> Self {
         IKey(v.as_bytes().to_vec())
@@ -153,11 +150,6 @@ impl BlkIndexer {
             blk: Mutex::new(Store::new(dir, "blk", Self::MAX_FILE_SIZE)?),
             rev: Mutex::new(Store::new(dir, "rev", Self::MAX_FILE_SIZE)?),
         })
-    }
-    pub fn write(&self, blk: &[u8], rev: &[u8]) -> Result<(), Error> {
-        self.blk.lock().unwrap().push(blk)?;
-        self.rev.lock().unwrap().push(rev)?;
-        Ok(())
     }
 }
 

@@ -25,6 +25,17 @@ pub struct HeaderAttr {
     pub rev: Attr,   //回退数据存储
 }
 
+impl HeaderAttr {
+    /// 是否包含区块数据
+    pub fn has_blk(&self) -> bool {
+        self.blk.is_valid()
+    }
+    /// 是否包含回退数据
+    pub fn has_rev(&self) -> bool {
+        self.rev.is_valid()
+    }
+}
+
 /// 默认区块数据头
 /// 区块id存储的对应数据
 impl Default for HeaderAttr {

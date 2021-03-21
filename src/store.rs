@@ -8,24 +8,24 @@ use std::path::{Path, PathBuf};
 /// 区块存储属性
 #[derive(Debug, PartialEq)]
 pub struct Attr {
-    pub idx: u32,  //所在文件
-    pub off: u32,  //文件偏移
-    pub size: u32, //文件大小
+    pub idx: u32, //所在文件
+    pub off: u32, //文件偏移
+    pub len: u32, //文件大小
 }
 
 impl Attr {
     /// 是否有效
     pub fn is_valid(&self) -> bool {
-        self.size > 0
+        self.len != u32::MAX && self.idx != u32::MAX && self.off != u32::MAX
     }
 }
 
 impl Default for Attr {
     fn default() -> Self {
         Attr {
-            idx: 0,
-            off: 0,
-            size: 0,
+            idx: u32::MAX,
+            off: u32::MAX,
+            len: u32::MAX,
         }
     }
 }
@@ -34,7 +34,7 @@ impl Serializer for Attr {
     fn encode(&self, w: &mut Writer) {
         w.u32(self.idx);
         w.u32(self.off);
-        w.u32(self.size);
+        w.u32(self.len);
     }
     fn decode(r: &mut Reader) -> Result<Self, Error>
     where
@@ -43,7 +43,7 @@ impl Serializer for Attr {
         let mut attr = Attr::default();
         attr.idx = r.u32()?;
         attr.off = r.u32()?;
-        attr.size = r.u32()?;
+        attr.len = r.u32()?;
         Ok(attr)
     }
 }
@@ -200,11 +200,11 @@ fn test_store_file() {
 /// 区块数据和回退数据存储
 /// .blk 存储区块内容 .rev 存储回退数据
 pub struct Store {
-    idx: u32,
-    max: u32,
-    dir: String, //存储目录
-    ext: String, //文件后缀
-    cache: Vec<StoreFile>,
+    idx: u32,              //最大文件编号
+    max: u32,              //每个文件的最大长度
+    dir: String,           //存储目录
+    ext: String,           //文件后缀
+    cache: Vec<StoreFile>, //打开的文件缓存，只有最后一个可写入
 }
 
 impl Store {
@@ -291,6 +291,7 @@ impl Store {
     }
     /// 追加写入数据
     /// 返回写入前的文件长度
+    /// 这个长度就是写入的文件的数据位置
     pub fn push(&mut self, b: &[u8]) -> Result<Attr, Error> {
         let bl = b.len() as u32;
         if bl == 0 {
@@ -302,7 +303,7 @@ impl Store {
         Ok(Attr {
             idx: self.idx,
             off: pos,
-            size: bl,
+            len: bl,
         })
     }
     /// 读取buf指定大小的数据
@@ -350,7 +351,7 @@ fn test_all_store() {
         Attr {
             idx: 0,
             off: 0,
-            size: 12
+            len: 12
         }
     );
     let attr = store.push(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10]).unwrap();
@@ -359,7 +360,7 @@ fn test_all_store() {
         Attr {
             idx: 0,
             off: 12,
-            size: 10
+            len: 10
         }
     );
     let buf = store.pull(0, 0, 12).unwrap();
