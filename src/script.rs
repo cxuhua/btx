@@ -1,6 +1,6 @@
 use crate::account::Account;
 use crate::bytes::{FromBytes, IntoBytes};
-use crate::errors;
+use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::iobuf;
 use crate::iobuf::{Reader, Serializer, Writer};
@@ -88,7 +88,7 @@ pub struct Exector {
 pub trait ExectorEnv: Sized {
     /// OP_CHECKSIG OP_CHECKSIG_VERIFY 验签使用
     /// ele: 堆栈顶部元素(account数据类型)
-    fn verify_sign(&self, ele: &Ele) -> Result<bool, errors::Error>;
+    fn verify_sign(&self, ele: &Ele) -> Result<bool, Error>;
 }
 
 impl Exector {
@@ -113,9 +113,9 @@ impl Exector {
         }
     }
     ///
-    fn pop(&mut self, n: usize) -> Result<(), errors::Error> {
+    fn pop(&mut self, n: usize) -> Result<(), Error> {
         if self.eles.len() < n {
-            return errors::Error::msg("StackLenErr");
+            return Error::msg("StackLenErr");
         }
         self.eles.truncate(self.eles.len() - n);
         Ok(())
@@ -128,23 +128,23 @@ impl Exector {
         }
     }
     //检测栈元素数量至少为l个
-    pub fn check(&self, l: usize) -> Result<usize, errors::Error> {
+    pub fn check(&self, l: usize) -> Result<usize, Error> {
         let rl = self.len();
         if rl < l {
-            errors::Error::msg("StackLenErr")
+            Error::msg("StackLenErr")
         } else {
             Ok(rl)
         }
     }
     ///执行脚本
-    pub fn exec(&mut self, script: &Script, env: &impl ExectorEnv) -> Result<usize, errors::Error> {
+    pub fn exec(&mut self, script: &Script, env: &impl ExectorEnv) -> Result<usize, Error> {
         //脚本过大
         if script.len() > MAX_SCRIPT_SIZE {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         let mut reader = script.reader();
         if reader.remaining() == 0 {
-            return errors::Error::msg("ScriptEmptyErr");
+            return Error::msg("ScriptEmptyErr");
         }
         let mut step = 0;
         loop {
@@ -178,7 +178,7 @@ impl Exector {
                         let v = reader.i64()? as i64;
                         self.eles.push(Ele::from(v));
                     }
-                    _ => return errors::Error::msg("ScriptFmtErr"),
+                    _ => return Error::msg("ScriptFmtErr"),
                 },
                 OP_DATA_1..=OP_DATA_4 => match op {
                     OP_DATA_1 => {
@@ -196,7 +196,7 @@ impl Exector {
                         let d = reader.get_bytes(l)?;
                         self.eles.push(Ele::from(d));
                     }
-                    _ => return errors::Error::msg("ScriptFmtErr"),
+                    _ => return Error::msg("ScriptFmtErr"),
                 },
                 OP_VERIFY => {
                     //验证顶部元素是否为true,不是返回错误,否则删除栈顶继续
@@ -204,7 +204,7 @@ impl Exector {
                     let val: bool = self.top(-1).try_into()?;
                     self.pop(1)?;
                     if !val {
-                        return errors::Error::msg("ScriptVerifyErr");
+                        return Error::msg("ScriptVerifyErr");
                     }
                 }
                 OP_HASHER => {
@@ -224,7 +224,7 @@ impl Exector {
                     //如果只验证true不放入结果到堆栈
                     if op == OP_EQUAL_VERIFY {
                         if !val {
-                            return errors::Error::msg("ScriptVerifyErr");
+                            return Error::msg("ScriptVerifyErr");
                         }
                     } else {
                         self.eles.push(Ele::from(val));
@@ -246,7 +246,7 @@ impl Exector {
                     //如果只验证true不放入结果到堆栈
                     if op == OP_CHECKSIG_VERIFY {
                         if !val {
-                            return errors::Error::msg("ScriptCheckSigErr");
+                            return Error::msg("ScriptCheckSigErr");
                         }
                     } else {
                         self.eles.push(Ele::from(val));
@@ -255,18 +255,18 @@ impl Exector {
                 OP_VERIFY_INOUT => {
                     //检测是否为输入+输出脚本
                     if self.typs.len() != 2 {
-                        return errors::Error::msg("ScriptExeErr");
+                        return Error::msg("ScriptExeErr");
                     }
                     if self.typs != [SCRIPT_TYPE_IN, SCRIPT_TYPE_OUT] {
-                        return errors::Error::msg("ScriptExeErr");
+                        return Error::msg("ScriptExeErr");
                     }
                 }
                 _ => {
-                    return errors::Error::msg("ScriptFmtErr");
+                    return Error::msg("ScriptFmtErr");
                 }
             }
             if step > MAX_SCRIPT_OPS {
-                return errors::Error::msg("ScriptFmtErr");
+                return Error::msg("ScriptFmtErr");
             }
             if reader.remaining() == 0 {
                 break;
@@ -280,7 +280,7 @@ impl Exector {
 struct TestEnv;
 
 impl ExectorEnv for TestEnv {
-    fn verify_sign(&self, ele: &Ele) -> Result<bool, errors::Error> {
+    fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
         let a: Account = ele.try_into()?;
         a.verify("aaa".as_bytes())
     }
@@ -482,14 +482,14 @@ impl Default for Script {
 
 impl Script {
     ///获取脚本op数量
-    pub fn ops(&self) -> Result<usize, errors::Error> {
+    pub fn ops(&self) -> Result<usize, Error> {
         //脚本过大
         if self.len() > MAX_SCRIPT_SIZE {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         let mut reader = self.reader();
         if reader.remaining() == 0 {
-            return errors::Error::msg("ScriptEmptyErr");
+            return Error::msg("ScriptEmptyErr");
         }
         let mut ops = 0;
         loop {
@@ -514,7 +514,7 @@ impl Script {
                 }
             }
             if ops > MAX_SCRIPT_OPS {
-                return errors::Error::msg("ScriptFmtErr");
+                return Error::msg("ScriptFmtErr");
             }
             if reader.remaining() == 0 {
                 break;
@@ -523,27 +523,27 @@ impl Script {
         Ok(ops)
     }
     /// 获取脚本最大长度
-    pub fn max_size(&self) -> Result<usize, errors::Error> {
+    pub fn max_size(&self) -> Result<usize, Error> {
         match self.get_type()? {
             SCRIPT_TYPE_CB => Ok(MAX_SCRIPT_CB_SIZE),
             SCRIPT_TYPE_IN => Ok(MAX_SCRIPT_IN_SIZE),
             SCRIPT_TYPE_OUT => Ok(MAX_SCRIPT_OUT_SIZE),
-            _ => return errors::Error::msg("ScriptFmtErr"),
+            _ => return Error::msg("ScriptFmtErr"),
         }
     }
     ///检测脚本数据
-    pub fn check(&self) -> Result<(), errors::Error> {
+    pub fn check(&self) -> Result<(), Error> {
         //最大限制长度
         if self.len() > MAX_SCRIPT_SIZE {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         //不同类型长度
         if self.len() == 0 || self.len() > self.max_size()? {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         //执行单元数量
         if self.ops()? > MAX_SCRIPT_OPS {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         Ok(())
     }
@@ -566,13 +566,13 @@ impl Script {
         return self.writer.bytes();
     }
     /// 获取脚本类型
-    pub fn get_type(&self) -> Result<u8, errors::Error> {
+    pub fn get_type(&self) -> Result<u8, Error> {
         let b = self.writer.bytes();
         if b.len() < 2 {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         if b[0] != OP_TYPE {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         Ok(b[1])
     }
@@ -681,7 +681,7 @@ impl Serializer for Script {
     fn encode(&self, w: &mut Writer) {
         w.put(self);
     }
-    fn decode(r: &mut Reader) -> Result<Script, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<Script, Error> {
         r.get()
     }
 }
@@ -693,7 +693,7 @@ impl IntoBytes for Script {
 }
 
 impl FromBytes for Script {
-    fn from_bytes(bb: &Vec<u8>) -> Result<Self, errors::Error> {
+    fn from_bytes(bb: &Vec<u8>) -> Result<Self, Error> {
         match iobuf::Writer::from_bytes(bb) {
             Ok(w) => Ok(Script { writer: w }),
             Err(err) => Err(err),
@@ -710,52 +710,52 @@ pub enum Ele {
 }
 
 impl TryFrom<&Ele> for bool {
-    type Error = errors::Error;
+    type Error = Error;
     fn try_from(value: &Ele) -> Result<Self, Self::Error> {
         if let Ele::Bool(pv) = value {
             return Ok(*pv);
         }
-        return errors::Error::msg("StackEleTypeErr");
+        return Error::msg("StackEleTypeErr");
     }
 }
 
 impl TryFrom<&Ele> for i64 {
-    type Error = errors::Error;
+    type Error = Error;
     fn try_from(value: &Ele) -> Result<Self, Self::Error> {
         if let Ele::Number(pv) = value {
             return Ok(*pv);
         }
-        return errors::Error::msg("StackEleTypeErr");
+        return Error::msg("StackEleTypeErr");
     }
 }
 
 impl<'a> TryFrom<&'a Ele> for &'a [u8] {
-    type Error = errors::Error;
+    type Error = Error;
     fn try_from(value: &'a Ele) -> Result<Self, Self::Error> {
         if let Ele::Data(pv) = value {
             return Ok(pv);
         }
-        return errors::Error::msg("StackEleTypeErr");
+        return Error::msg("StackEleTypeErr");
     }
 }
 
 impl TryFrom<&Ele> for Hasher {
-    type Error = errors::Error;
+    type Error = Error;
     fn try_from(value: &Ele) -> Result<Self, Self::Error> {
         if let Ele::Data(pv) = value {
             return Hasher::from_bytes(pv);
         }
-        return errors::Error::msg("StackEleTypeErr");
+        return Error::msg("StackEleTypeErr");
     }
 }
 
 impl TryFrom<&Ele> for Account {
-    type Error = errors::Error;
+    type Error = Error;
     fn try_from(value: &Ele) -> Result<Self, Self::Error> {
         if let Ele::Data(pv) = value {
             return Account::from_bytes(pv);
         }
-        return errors::Error::msg("StackEleTypeErr");
+        return Error::msg("StackEleTypeErr");
     }
 }
 
