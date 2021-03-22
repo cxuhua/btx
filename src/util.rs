@@ -66,15 +66,3 @@ fn test_log_use() {
     log::set_max_level(log::LevelFilter::Trace);
     log::info!("aaa{},{}", 111, 222);
 }
-
-#[test]
-fn test_panic() {
-    struct A(u32);
-    struct B(u32);
-    use std::any::{Any, TypeId};
-    fn is_a(s: &dyn Any) -> bool {
-        TypeId::of::<A>() == s.type_id()
-    }
-    let a = B(0);
-    println!("{}", is_a(&a));
-}
