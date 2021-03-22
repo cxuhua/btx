@@ -348,7 +348,8 @@ impl Store {
         })
     }
     /// 读取buf指定大小的数据
-    pub fn read(&mut self, i: u32, p: u32, buf: &mut [u8]) -> Result<(), Error> {
+    /// 返回读取的长度
+    pub fn read(&mut self, i: u32, p: u32, buf: &mut [u8]) -> Result<usize, Error> {
         let sf: &StoreFile;
         if let Some(v) = self.cache_file(i) {
             sf = v;
@@ -359,7 +360,7 @@ impl Store {
         }
         sf.seek(p as u64)?;
         sf.read(buf)?;
-        Ok(())
+        Ok(buf.len())
     }
     /// 读取数据
     /// i文件, p读取位置, l读取长度

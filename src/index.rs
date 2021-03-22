@@ -134,6 +134,7 @@ impl Indexer for BlkIndexer {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
+    /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
     /// 创建存储索引
     pub fn new(dir: &str) -> Result<Self, Error> {
