@@ -55,6 +55,39 @@ struct StoreFile {
     file: fs::File,
 }
 
+#[test]
+fn test_store_file_cmp() {
+    use std::cmp::{Ord, Ordering};
+    #[derive(Debug)]
+    struct File {
+        idx: u32,
+    }
+    impl PartialEq for File {
+        fn eq(&self, other: &File) -> bool {
+            self.idx == other.idx
+        }
+    }
+    impl Eq for File {}
+    impl PartialOrd for File {
+        fn partial_cmp(&self, other: &File) -> Option<Ordering> {
+            self.idx.partial_cmp(&other.idx)
+        }
+    }
+    impl Ord for File {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.idx.cmp(&other.idx)
+        }
+    }
+    let vs = vec![
+        File { idx: 1 },
+        File { idx: 2 },
+        File { idx: 3 },
+        File { idx: 0 },
+    ];
+    assert_eq!(3, vs.iter().max().unwrap().idx);
+    assert_eq!(0, vs.iter().min().unwrap().idx);
+}
+
 impl StoreFile {
     /// 存储文件路径
     fn store_file_path(dir: &Path, idx: u32, ext: &str) -> PathBuf {
@@ -70,16 +103,16 @@ impl StoreFile {
     /// path:路径
     /// ext:文件扩展
     /// max_file_size:单个文件最大存储字节
-    fn init_file(path: &str, ext: &str, max_file_size: u32) -> Result<Self, Error> {
-        let dir = Path::new(path);
+    fn init_file(dir: &str, ext: &str, max_file_size: u32) -> Result<Self, Error> {
+        let dir = Path::new(dir);
         let reader = fs::read_dir(dir);
         if let Err(err) = reader {
             return Error::std(err);
         }
         let reader = &mut reader.unwrap();
         let mut max = 0u32;
-        for item in reader.filter(|v| v.is_ok()) {
-            let item = item.unwrap();
+        for entry in reader.filter(|v| v.is_ok()) {
+            let item = entry.unwrap();
             //是否是文件
             if !item.file_type().map_or(false, |v| v.is_file()) {
                 continue;
@@ -89,36 +122,44 @@ impl StoreFile {
             if !path.extension().map_or(false, |v| v == ext) {
                 continue;
             }
-            let stem: String = path.file_stem().map_or("", |v| v.to_str().unwrap()).into();
+            //取出文件名,不包含扩展名
+            let stem: String = path
+                .file_stem()
+                .and_then(|v| v.to_str())
+                .map_or("", |v| v)
+                .into();
+            if stem == "" {
+                return Error::msg("stem path empty");
+            }
             if let Ok(idx) = stem.parse::<u32>() {
                 if idx > max {
                     max = idx
                 }
             }
         }
-        let last = Self::store_file_path(dir, max, ext);
-        if fs::metadata(&last).map_or(0, |v| v.len() as u32) > max_file_size {
+        let mut next = Self::store_file_path(dir, max, ext);
+        if fs::metadata(&next).map_or(0, |v| v.len() as u32) > max_file_size {
             max += 1;
+            next = Self::store_file_path(dir, max, ext);
         }
         //打开下个文件
-        let last = Self::store_file_path(dir, max, ext);
         fs::OpenOptions::new()
             .append(true)
             .read(true)
             .create(true)
-            .open(&last)
+            .open(&next)
             .map_or_else(Error::std, |v| Ok(StoreFile::new(max, v)))
     }
     fn metadata(&self) -> Result<fs::Metadata, Error> {
         self.file.metadata().map_or_else(Error::std, |v| Ok(v))
     }
     //打开只读的文件存储
-    fn open_only_read(idx: u32, path: &str, ext: &str) -> Result<Self, Error> {
-        let dir = Path::new(path);
-        let last = Self::store_file_path(dir, idx, ext);
+    fn open_only_read(idx: u32, dir: &str, ext: &str) -> Result<Self, Error> {
+        let dir = Path::new(dir);
+        let path = Self::store_file_path(dir, idx, ext);
         fs::OpenOptions::new()
             .read(true)
-            .open(&last)
+            .open(&path)
             .map_or_else(Error::std, |v| Ok(StoreFile::new(idx, v)))
     }
     /// 同步数据到磁盘
@@ -214,18 +255,18 @@ impl Store {
     fn remove_file(&mut self) {
         let mut rmin = u32::MAX;
         let mut ridx = usize::MAX;
-        for i in 0..self.cache.len() {
-            let file = &self.cache[i];
-            //不移除ref前写入文件
-            if file.idx == self.idx {
+        for (i, v) in self.cache.iter().enumerate() {
+            //不移除最后一个写入文件
+            if v.idx == self.idx {
                 continue;
             }
             //获取最小的文件索引
-            if file.idx < rmin {
-                rmin = file.idx;
+            if v.idx < rmin {
+                rmin = v.idx;
                 ridx = i;
             }
         }
+        //移除最小索引文件,如果有
         if ridx != usize::MAX {
             self.cache.remove(ridx);
         }
