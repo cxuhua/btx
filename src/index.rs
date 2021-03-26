@@ -1,4 +1,4 @@
-use crate::block::Block;
+use crate::block::{Best, Block};
 use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
@@ -97,6 +97,9 @@ impl IKey {
 pub trait Indexer: Sized {
     /// 根据k获取区块
     fn get(&self, _k: &IKey) -> Option<Arc<Block>>;
+    /// 获取最高区块信息
+    /// 不存在应该是没有区块记录
+    fn best(&self) -> Option<Best>;
 }
 
 pub struct BlkIndexer {
@@ -110,6 +113,12 @@ pub struct BlkIndexer {
 }
 
 impl Indexer for BlkIndexer {
+    /// 获取最高区块信息
+    /// 不存在应该是没有区块记录
+    fn best(&self) -> Option<Best> {
+        let key: IKey = Self::BEST_KEY.into();
+        self.idx.get(&key)
+    }
     /// 从索引中获取区块
     fn get(&self, k: &IKey) -> Option<Arc<Block>> {
         //如果缓存中存在
@@ -136,6 +145,7 @@ impl Indexer for BlkIndexer {
 impl BlkIndexer {
     /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
+    const BEST_KEY: &'static str = "__best__key__";
     /// 创建存储索引
     pub fn new(dir: &str) -> Result<Self, Error> {
         let idxpath = String::from(dir) + "/index";

@@ -19,27 +19,27 @@ pub trait Checker: Sized {
 
 /// 最高区块描述
 #[derive(Debug)]
-pub struct BestBlockAttr {
-    id: Hasher,  //区块id
-    height: u32, //区块高度
+pub struct Best {
+    pub id: Hasher,  //区块id
+    pub height: u32, //区块高度
 }
 
-impl Default for BestBlockAttr {
+impl Default for Best {
     fn default() -> Self {
-        BestBlockAttr {
+        Best {
             id: Hasher::zero(),
             height: u32::MAX,
         }
     }
 }
 
-impl Serializer for BestBlockAttr {
+impl Serializer for Best {
     fn encode(&self, wb: &mut Writer) {
         self.id.encode(wb);
         wb.u32(self.height);
     }
-    fn decode(r: &mut Reader) -> Result<BestBlockAttr, errors::Error> {
-        let mut value = BestBlockAttr::default();
+    fn decode(r: &mut Reader) -> Result<Best, errors::Error> {
+        let mut value = Best::default();
         value.id = r.decode()?;
         value.height = r.u32()?;
         Ok(value)
