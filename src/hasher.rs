@@ -9,7 +9,7 @@ pub const SIZE: usize = 32;
 use num_bigint::BigUint;
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::ops::{Div, Mul};
 
 #[test]
@@ -127,16 +127,16 @@ impl TryFrom<&str> for Hasher {
 impl TryFrom<u32> for Hasher {
     type Error = errors::Error;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        let s = value >> 24;
+        let size = value >> 24;
         let mut w = value & 0x007fffff;
-        if s <= 3 {
-            w >>= 8 * (3 - s);
-            if let Some(v) = &BigUint::from_u32(w) {
+        if size <= 3 {
+            w >>= 8 * (3 - size);
+            if let Some(ref v) = BigUint::from_u32(w) {
                 return Ok(v.into());
             }
         } else {
-            if let Some(v) = &BigUint::from_u32(w) {
-                let v = &(v << 8 * (s - 3));
+            if let Some(ref v) = BigUint::from_u32(w) {
+                let ref v = v << (8 * (size - 3));
                 return Ok(v.into());
             }
         }
@@ -151,6 +151,10 @@ impl From<&Hasher> for BigUint {
 }
 
 impl Hasher {
+    /// 从工作难度获取一个hasher
+    pub fn from_compact(value: u32) -> Result<Self, errors::Error> {
+        value.try_into()
+    }
     ///空hash
     pub fn zero() -> Self {
         return Hasher { inner: [0u8; SIZE] };
@@ -161,10 +165,10 @@ impl Hasher {
     /// ltime : 最后一个区块的时间
     /// ptime : (最后一个区块的高度 - 2016 + 1)区块的时间
     /// lbits : 最后一个区块的工作难度
-    pub fn compute_bits(&self, stime: u32, ltime: u32, ptime: u32, lbits: u32) -> u32 {
+    pub fn compute_bits(&self, stime: u32, ltime: i64, ptime: i64, lbits: u32) -> u32 {
         debug_assert!(stime > 0);
-        debug_assert!(ltime > ptime);
-        let mut sub = ltime - ptime;
+        debug_assert!(ltime > 0 && ltime > ptime);
+        let mut sub = (ltime - ptime) as u32;
         let sv = stime / 4;
         if sub < sv {
             sub = sv;
