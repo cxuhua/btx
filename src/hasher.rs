@@ -159,7 +159,7 @@ impl Hasher {
     pub fn zero() -> Self {
         return Hasher { inner: [0u8; SIZE] };
     }
-    ///计算下个工作难度
+    /// 计算下个区块工作难度
     /// self: 最小工作难度
     /// stime : 时间间隔 默认:14 * 24 * 60 * 60 = 1209600 每14天2016个的速度
     /// ltime : 最后一个区块的时间

@@ -17,6 +17,35 @@ pub trait Checker: Sized {
     fn check_value(&self) -> Result<(), errors::Error>;
 }
 
+/// 最高区块描述
+#[derive(Debug)]
+pub struct BestBlockAttr {
+    id: Hasher,  //区块id
+    height: u32, //区块高度
+}
+
+impl Default for BestBlockAttr {
+    fn default() -> Self {
+        BestBlockAttr {
+            id: Hasher::zero(),
+            height: u32::MAX,
+        }
+    }
+}
+
+impl Serializer for BestBlockAttr {
+    fn encode(&self, wb: &mut Writer) {
+        self.id.encode(wb);
+        wb.u32(self.height);
+    }
+    fn decode(r: &mut Reader) -> Result<BestBlockAttr, errors::Error> {
+        let mut value = BestBlockAttr::default();
+        value.id = r.decode()?;
+        value.height = r.u32()?;
+        Ok(value)
+    }
+}
+
 /// 区块存储属性
 #[derive(Debug)]
 pub struct HeaderAttr {
