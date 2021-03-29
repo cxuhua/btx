@@ -140,47 +140,36 @@ impl BlkIndexer {
     }
     /// 获取最高区块信息
     /// 不存在应该是没有区块记录
-    pub fn best(&self) -> Option<Best> {
+    pub fn best(&self) -> Result<Best, Error> {
         let key: IKey = Self::BEST_KEY.into();
         self.idx.get(&key)
     }
     /// 从索引中获取区块
-    pub fn get(&self, k: &IKey) -> Option<Arc<Block>> {
+    pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
         //u32 height读取,对应一个hashid
         if k.len() == 4 {
-            if let Some(ref ik) = self.idx.get::<Hasher>(k) {
+            if let Ok(ref ik) = self.idx.get::<Hasher>(k) {
                 return self.get(&ik.into());
             }
         }
         //如果缓存中存在
-        if let Some(v) = self.cache.get(k) {
-            return Some(v);
+        if let Ok(v) = self.cache.get(k) {
+            return Ok(v);
         }
         //从数据库查询并加入缓存
-        let attr: Option<HeaderAttr> = self.idx.get(k);
-        if attr.is_none() {
-            return None;
-        }
-        let attr = attr.unwrap();
+        let attr: HeaderAttr = self.idx.get(k)?;
         //读取区块数据
-        let buf = self.blk.lock().unwrap().pull(&attr.blk);
-        if buf.is_err() {
-            return None;
-        }
-        let buf = buf.unwrap();
+        let buf = self.blk.lock().unwrap().pull(&attr.blk)?;
         //解析成区块
         let mut reader = Reader::new(&buf);
-        let blk: Option<Block> = reader.decode().map_or(None, |v| Some(v));
-        if blk.is_none() {
-            return None;
-        }
-        let blk = blk.unwrap();
+        let blk: Block = reader.decode()?;
         //加入缓存并返回
         self.cache.put(k, &blk);
-        Some(Arc::new(blk))
+        Ok(Arc::new(blk))
     }
     /// 链接一个新的区块
     /// 返回区块Id
+    /// 写入的数据: best,height->block id,block id->block attr,blk data,rev data
     pub fn link(&self, blk: &Block) -> Result<Hasher, Error> {
         blk.check_value()?;
         let id = blk.id()?;
@@ -188,17 +177,18 @@ impl BlkIndexer {
         if self.idx.has(key) {
             return Error::msg("block exists");
         }
+        //开始写入
         let mut batch = IBatch::new(true);
         let mut best = Best::default();
         best.id = id.clone();
         match self.best() {
-            Some(v) => {
+            Ok(v) => {
                 //其他区块检测上一个区块,现在也暂时直接写入//best配置写入
                 best.height = v.height + 1;
                 //写入新的并保存旧的到回退数据
                 batch.replace(&Self::BEST_KEY.into(), &best, &v);
             }
-            None => {
+            Err(_) => {
                 //第一个区块符合配置的上帝区块就直接写入
                 best.height = 0;
                 batch.put(&Self::BEST_KEY.into(), &best);
@@ -212,12 +202,20 @@ impl BlkIndexer {
         attr.bhv = blk.header.clone();
         //当前区块高度
         attr.hhv = best.height;
-        //获取区块数据并写入
+        //获取区块数据,回退数据并写入
         let blkwb = blk.bytes();
-        attr.blk = self.blk.lock().unwrap().push(blkwb.bytes())?;
-        //获取回退数据并写入
         let revwb = batch.reverse();
-        attr.rev = self.rev.lock().unwrap().push(revwb.bytes())?;
+        //出发事件
+        blk.on_link()?;
+        //写二进制数据
+        attr.blk = self
+            .blk
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.push(blkwb.bytes()))?;
+        attr.rev = self
+            .rev
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.push(revwb.bytes()))?;
         //写入区块id对应的区块头属性,这个不会包含在回退数据中,回退时删除数据
         batch.put(&id.as_ref().into(), &attr);
         //批量写入
@@ -226,18 +224,8 @@ impl BlkIndexer {
     }
     /// 回退一个区块,回退多个连续调用次方法
     pub fn pop(&self) -> Result<Block, Error> {
-        println!("pop");
-        let best = self.best();
-        println!("{:?}", best);
-        if best.is_none() {
-            return Error::msg("best miss");
-        }
-        let best = best.unwrap();
-        let attr: Option<HeaderAttr> = self.idx.get(&best.id.as_ref().into());
-        if attr.is_none() {
-            return Error::msg("block miss");
-        }
-        let attr = attr.unwrap();
+        let best = self.best()?;
+        let attr: HeaderAttr = self.idx.get(&best.id.as_ref().into())?;
         //读取区块数据
         let buf = self.blk.lock().unwrap().pull(&attr.blk)?;
         //解析成区块
@@ -248,6 +236,10 @@ impl BlkIndexer {
         let mut batch: IBatch = buf[..].try_into()?;
         //添加删除最后一个区块
         batch.del::<Block>(&best.id.as_ref().into(), None);
+        //移除事件
+        blk.on_pop()?;
+        //删除缓存
+        self.cache.pop(&best.id.as_ref().into());
         //批量写入
         self.idx.write(&batch, true)?;
         Ok(blk)
@@ -331,9 +323,11 @@ impl BlkCache {
 
     /// 从缓存获取值并复制返回
     /// 复制对应的值返回
-    pub fn get(&self, k: &IKey) -> Option<Arc<Block>> {
+    pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
         let mut wl = self.lru.lock().unwrap();
-        wl.get(k).map(|v| v.clone())
+        wl.get(k)
+            .map(|v| v.clone())
+            .ok_or(Error::error("not found"))
     }
 }
 

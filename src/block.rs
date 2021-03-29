@@ -286,6 +286,14 @@ impl Serializer for Block {
 }
 
 impl Block {
+    /// 从链移除前
+    pub fn on_pop(&self) -> Result<(), errors::Error> {
+        Ok(())
+    }
+    /// 将要链接前
+    pub fn on_link(&self) -> Result<(), errors::Error> {
+        Ok(())
+    }
     /// 按索引获取交易
     pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
         if idx >= self.txs.len() {

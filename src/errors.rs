@@ -3,6 +3,10 @@
 pub struct Error(String);
 
 impl Error {
+    /// 创建错误
+    pub fn error(s: &str) -> Self {
+        Error(s.into())
+    }
     /// 创建错误信息
     pub fn msg<T>(s: &str) -> Result<T, Self> {
         Err(Error(s.into()))

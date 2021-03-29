@@ -384,17 +384,16 @@ impl LevelDB {
             .map_or(false, |v| v.map_or(false, |v| v.len() > 0))
     }
     /// 获取数据
-    pub fn get<V>(&self, k: &IKey) -> Option<V>
+    pub fn get<V>(&self, k: &IKey) -> Result<V, Error>
     where
         V: Serializer + Default,
     {
         let opts = ReadOptions::new();
-        self.db.get(opts, k).map_or(None, |v| {
-            v.map_or(None, |v| {
-                let mut r = Reader::new(&v);
-                r.decode().map_or(None, |v| Some(v))
-            })
-        })
+        let buf = self.db.get(opts, k).map_or_else(Error::std, |v| {
+            v.map_or(Error::msg("data empty"), |v| Ok(v))
+        })?;
+        let mut r = Reader::new(&buf);
+        r.decode()
     }
     /// 删除数据
     pub fn del(&self, k: &IKey, sync: bool) -> Result<(), Error> {
@@ -442,8 +441,8 @@ fn test_leveldb_get_put_del() {
         db.del(&i.into(), false).unwrap();
     }
     for i in 1..5u32 {
-        let ret: Option<Block> = db.get(&i.into());
-        assert_eq!(None, ret);
+        let ret = db.has(&i.into());
+        assert_eq!(false, ret);
     }
 }
 
