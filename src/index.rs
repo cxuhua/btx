@@ -1,8 +1,9 @@
-use crate::block::{Best, Block};
+use crate::block::{Best, Block, Checker, HeaderAttr};
 use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
-use crate::leveldb::LevelDB;
+use crate::iobuf::{Reader, Serializer, Writer};
+use crate::leveldb::{IBatch, LevelDB};
 use crate::store::Store;
 use crate::util;
 use bytes::BufMut;
@@ -10,7 +11,7 @@ use core::hash;
 use db_key::Key;
 use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
-use std::convert::Into;
+use std::convert::{Into, TryInto};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -112,32 +113,6 @@ pub struct BlkIndexer {
     rev: Mutex<Store>, //回退日志存储索引
 }
 
-impl Indexer for BlkIndexer {
-    /// 获取最高区块信息
-    /// 不存在应该是没有区块记录
-    fn best(&self) -> Option<Best> {
-        let key: IKey = Self::BEST_KEY.into();
-        self.idx.get(&key)
-    }
-    /// 从索引中获取区块
-    fn get(&self, k: &IKey) -> Option<Arc<Block>> {
-        //如果缓存中存在
-        if let Some(v) = self.cache.get(k) {
-            return Some(v);
-        }
-        //从数据库查询并加入缓存
-        let v: Option<Block> = self.idx.get(k);
-        if v.is_none() {
-            return None;
-        }
-        let blk = v.unwrap();
-        //加入缓存
-        self.cache.put(k, &blk);
-        //
-        Some(Arc::new(blk))
-    }
-}
-
 /// 数据文件分布说明
 /// data  --- 数据根目录
 ///       --- block 区块内容目录 store存储
@@ -145,6 +120,7 @@ impl Indexer for BlkIndexer {
 impl BlkIndexer {
     /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
+    /// 最高区块入口存储key
     const BEST_KEY: &'static str = "__best__key__";
     /// 创建存储索引
     pub fn new(dir: &str) -> Result<Self, Error> {
@@ -162,14 +138,151 @@ impl BlkIndexer {
             rev: Mutex::new(Store::new(dir, "rev", Self::MAX_FILE_SIZE)?),
         })
     }
+    /// 获取最高区块信息
+    /// 不存在应该是没有区块记录
+    pub fn best(&self) -> Option<Best> {
+        let key: IKey = Self::BEST_KEY.into();
+        self.idx.get(&key)
+    }
+    /// 从索引中获取区块
+    pub fn get(&self, k: &IKey) -> Option<Arc<Block>> {
+        //u32 height读取,对应一个hashid
+        if k.len() == 4 {
+            if let Some(ref ik) = self.idx.get::<Hasher>(k) {
+                return self.get(&ik.into());
+            }
+        }
+        //如果缓存中存在
+        if let Some(v) = self.cache.get(k) {
+            return Some(v);
+        }
+        //从数据库查询并加入缓存
+        let attr: Option<HeaderAttr> = self.idx.get(k);
+        if attr.is_none() {
+            return None;
+        }
+        let attr = attr.unwrap();
+        //读取区块数据
+        let buf = self.blk.lock().unwrap().pull(&attr.blk);
+        if buf.is_err() {
+            return None;
+        }
+        let buf = buf.unwrap();
+        //解析成区块
+        let mut reader = Reader::new(&buf);
+        let blk: Option<Block> = reader.decode().map_or(None, |v| Some(v));
+        if blk.is_none() {
+            return None;
+        }
+        let blk = blk.unwrap();
+        //加入缓存并返回
+        self.cache.put(k, &blk);
+        Some(Arc::new(blk))
+    }
+    /// 链接一个新的区块
+    /// 返回区块Id
+    pub fn link(&self, blk: &Block) -> Result<Hasher, Error> {
+        blk.check_value()?;
+        let id = blk.id()?;
+        let ref key: IKey = id.as_ref().into();
+        if self.idx.has(key) {
+            return Error::msg("block exists");
+        }
+        let mut batch = IBatch::new(true);
+        let mut best = Best::default();
+        best.id = id.clone();
+        match self.best() {
+            Some(v) => {
+                //其他区块检测上一个区块,现在也暂时直接写入//best配置写入
+                best.height = v.height + 1;
+                //写入新的并保存旧的到回退数据
+                batch.replace(&Self::BEST_KEY.into(), &best, &v);
+            }
+            None => {
+                //第一个区块符合配置的上帝区块就直接写入
+                best.height = 0;
+                batch.put(&Self::BEST_KEY.into(), &best);
+            }
+        }
+        //高度对应的区块id
+        batch.put(&best.height.into(), &best.id);
+        //id对应的区块头属性
+        let mut attr = HeaderAttr::default();
+        //当前区块头
+        attr.bhv = blk.header.clone();
+        //当前区块高度
+        attr.hhv = best.height;
+        //获取区块数据并写入
+        let blkwb = blk.bytes();
+        attr.blk = self.blk.lock().unwrap().push(blkwb.bytes())?;
+        //获取回退数据并写入
+        let revwb = batch.reverse();
+        attr.rev = self.rev.lock().unwrap().push(revwb.bytes())?;
+        //写入区块id对应的区块头属性,这个不会包含在回退数据中,回退时删除数据
+        batch.put(&id.as_ref().into(), &attr);
+        //批量写入
+        self.idx.write(&batch, true)?;
+        Ok(id)
+    }
+    /// 回退一个区块,回退多个连续调用次方法
+    pub fn pop(&self) -> Result<Block, Error> {
+        println!("pop");
+        let best = self.best();
+        println!("{:?}", best);
+        if best.is_none() {
+            return Error::msg("best miss");
+        }
+        let best = best.unwrap();
+        let attr: Option<HeaderAttr> = self.idx.get(&best.id.as_ref().into());
+        if attr.is_none() {
+            return Error::msg("block miss");
+        }
+        let attr = attr.unwrap();
+        //读取区块数据
+        let buf = self.blk.lock().unwrap().pull(&attr.blk)?;
+        //解析成区块
+        let mut reader = Reader::new(&buf);
+        let blk: Block = reader.decode()?;
+        //读取回退数据
+        let buf = self.rev.lock().unwrap().pull(&attr.rev)?;
+        let mut batch: IBatch = buf[..].try_into()?;
+        //添加删除最后一个区块
+        batch.del::<Block>(&best.id.as_ref().into(), None);
+        //批量写入
+        self.idx.write(&batch, true)?;
+        Ok(blk)
+    }
 }
 
 #[test]
-fn test_block_indexer() {
-    BlkIndexer::new("./tmp").unwrap();
+fn test_simple_link_pop() {
+    use tempdir::TempDir;
+    let tmp = TempDir::new("db").unwrap();
+    let idx = BlkIndexer::new(tmp.path().to_str().unwrap()).unwrap();
+    for i in 0u32..=10 {
+        let mut b1 = Block::default();
+        b1.header.time = i;
+        idx.link(&b1).unwrap();
+    }
+    for i in 0u32..=10 {
+        let mut b1 = Block::default();
+        b1.header.time = i;
+        let id = b1.id().unwrap();
+        let b2 = idx.get(&id.as_ref().into()).unwrap();
+        assert_eq!(b1, *b2);
+        let b3 = idx.get(&i.into()).unwrap();
+        assert_eq!(b1, *b3);
+    }
+    let best = idx.best().unwrap();
+    assert_eq!(10, best.height);
+    for i in 0u32..=10 {
+        let best = idx.best().unwrap();
+        assert_eq!(10 - i, best.height);
+        idx.pop().unwrap();
+    }
 }
 
-/// lru线程安全的区块缓存实现
+/// 线程安全的区块LRU缓存实现
 pub struct BlkCache {
     lru: Mutex<LruCache<IKey, Arc<Block>>>,
 }

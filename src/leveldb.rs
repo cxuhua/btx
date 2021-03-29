@@ -87,7 +87,22 @@ impl IBatch {
             fv.delete(k.clone())
         }
     }
-
+    /// 替换数据,同key放入新数据,然后旧的作为回退写入回退数据
+    pub fn replace<V>(&mut self, k: &IKey, new: &V, old: &V)
+    where
+        V: Serializer,
+    {
+        let mut wb = Writer::default();
+        new.encode(&mut wb);
+        assert!(k.len() < 0xFFFF && wb.len() < 0xFFFF);
+        self.b.put(k.clone(), wb.bytes());
+        if let Some(ref mut fv) = self.f {
+            let mut wb = Writer::default();
+            old.encode(&mut wb);
+            assert!(wb.len() < 0xFFFF);
+            fv.put(k.clone(), wb.bytes());
+        }
+    }
     /// 获取批次数据
     pub fn bytes(&mut self) -> Writer {
         let mut writer = Writer::default();
@@ -349,7 +364,7 @@ impl LevelDB {
         }
     }
     /// 添加数据
-    pub fn put<V>(&self, k: &IKey, v: V, sync: bool) -> Result<(), Error>
+    pub fn put<V>(&self, k: &IKey, v: &V, sync: bool) -> Result<(), Error>
     where
         V: Serializer,
     {
@@ -415,7 +430,7 @@ fn test_leveldb_get_put_del() {
     for i in 1..10u32 {
         let mut blk = Block::default();
         blk.header.set_ver(i as u16);
-        db.put(&i.into(), blk, false).unwrap();
+        db.put(&i.into(), &blk, false).unwrap();
         assert_eq!(true, db.has(&i.into()));
     }
     assert_eq!(false, db.has(&100.into()));
@@ -441,7 +456,7 @@ fn test_leveldb_iter() {
     for i in ["1", "123", "1234", "12345", "1245", "2", "3"].iter() {
         let blk = Block::default();
         let k: IKey = i.as_bytes().into();
-        db.put(&k.into(), blk, false).unwrap();
+        db.put(&k.into(), &blk, false).unwrap();
     }
     //按前缀迭代
     let prefix: IKey = "2".as_bytes().into();
@@ -470,7 +485,7 @@ fn test_leveldb_reverse() {
     for i in ["1", "123", "1234", "12345", "1245", "2", "3"].iter() {
         let blk = Block::default();
         let k: IKey = i.as_bytes().into();
-        db.put(&k.into(), blk, false).unwrap();
+        db.put(&k.into(), &blk, false).unwrap();
     }
     //从12345key反向迭代
     let prefix: IKey = "12345".as_bytes().into();

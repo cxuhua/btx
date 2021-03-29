@@ -364,17 +364,17 @@ impl Store {
     }
     /// 读取数据
     /// i文件, p读取位置, l读取长度
-    pub fn pull(&mut self, i: u32, p: u32, l: u32) -> Result<Vec<u8>, Error> {
+    pub fn pull(&mut self, attr: &Attr) -> Result<Vec<u8>, Error> {
         let sf: &StoreFile;
-        if let Some(v) = self.cache_file(i) {
+        if let Some(v) = self.cache_file(attr.idx) {
             sf = v;
-        } else if let Ok(v) = self.open_file(i) {
+        } else if let Ok(v) = self.open_file(attr.idx) {
             sf = v;
         } else {
             return Error::msg("open file error");
         }
-        let mut buf = vec![0u8; l as usize];
-        sf.seek(p as u64)?;
+        let mut buf = vec![0u8; attr.len as usize];
+        sf.seek(attr.off as u64)?;
         sf.read(&mut buf)?;
         Ok(buf)
     }
@@ -405,7 +405,13 @@ fn test_all_store() {
             len: 10
         }
     );
-    let buf = store.pull(0, 0, 12).unwrap();
+    let buf = store
+        .pull(&Attr {
+            idx: 0,
+            off: 0,
+            len: 12,
+        })
+        .unwrap();
     assert_eq!(&buf, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     assert_eq!(1, store.cache.len());
     assert_eq!(0, store.idx);

@@ -150,7 +150,17 @@ impl From<&Hasher> for BigUint {
     }
 }
 
+impl AsRef<Hasher> for Hasher {
+    fn as_ref(&self) -> &Hasher {
+        self
+    }
+}
+
 impl Hasher {
+    /// 从16进制获取转换
+    pub fn hex(v: &str) -> Self {
+        v.try_into().unwrap()
+    }
     /// 从工作难度获取一个hasher
     pub fn from_compact(value: u32) -> Result<Self, errors::Error> {
         value.try_into()

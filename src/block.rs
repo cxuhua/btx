@@ -24,6 +24,13 @@ pub struct Best {
     pub height: u32, //区块高度
 }
 
+impl Best {
+    /// 是否是有效的记录
+    pub fn is_valid(&self) -> bool {
+        self.id != Hasher::zero() && self.height != u32::MAX
+    }
+}
+
 impl Default for Best {
     fn default() -> Self {
         Best {
@@ -50,6 +57,7 @@ impl Serializer for Best {
 #[derive(Debug)]
 pub struct HeaderAttr {
     pub bhv: Header, //区块头
+    pub hhv: u32,    //当前区块高度
     pub blk: Attr,   //数据存储位置
     pub rev: Attr,   //回退数据存储
 }
@@ -71,6 +79,7 @@ impl Default for HeaderAttr {
     fn default() -> Self {
         HeaderAttr {
             bhv: Header::default(),
+            hhv: 0,
             blk: Attr::default(),
             rev: Attr::default(),
         }
@@ -80,12 +89,14 @@ impl Default for HeaderAttr {
 impl Serializer for HeaderAttr {
     fn encode(&self, wb: &mut Writer) {
         self.bhv.encode(wb);
+        wb.u32(self.hhv);
         self.blk.encode(wb);
         self.rev.encode(wb);
     }
     fn decode(r: &mut Reader) -> Result<HeaderAttr, errors::Error> {
         let mut value = HeaderAttr::default();
         value.bhv = r.decode()?;
+        value.hhv = r.u32()?;
         value.blk = r.decode()?;
         value.rev = r.decode()?;
         Ok(value)
@@ -223,6 +234,9 @@ impl PartialEq for Block {
 
 impl Checker for Block {
     fn check_value(&self) -> Result<(), errors::Error> {
+        //检测区块头
+        self.header.check_value()?;
+        //检测区块区块交易
         for iv in self.txs.iter() {
             iv.check_value()?
         }
@@ -284,6 +298,12 @@ impl Block {
         let mut wb = Writer::default();
         self.header.encode(&mut wb);
         Ok(Hasher::hash(&wb.bytes()))
+    }
+    /// 获取区块数据
+    pub fn bytes(&self) -> Writer {
+        let mut wb = Writer::default();
+        self.encode(&mut wb);
+        wb
     }
     /// 计算merkle值
     pub fn compute_merkle(&self) -> Result<Hasher, errors::Error> {
