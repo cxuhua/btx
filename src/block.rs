@@ -2,7 +2,9 @@ use crate::account::Account;
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
+use crate::index::BlkIndexer;
 use crate::iobuf::{Reader, Serializer, Writer};
+use crate::leveldb::IBatch;
 use crate::merkle::MerkleTree;
 use crate::script::*;
 use crate::store::Attr;
@@ -287,13 +289,17 @@ impl Serializer for Block {
 
 impl Block {
     /// 从链移除前
-    pub fn on_pop(&self) -> Result<(), errors::Error> {
+    pub fn on_pop(&self, idx: &BlkIndexer, batch: &mut IBatch) -> Result<(), errors::Error> {
         Ok(())
     }
+    /// 从链移除后
+    pub fn on_poped(&self, idx: &BlkIndexer) {}
     /// 将要链接前
-    pub fn on_link(&self) -> Result<(), errors::Error> {
+    pub fn on_link(&self, idx: &BlkIndexer, batch: &mut IBatch) -> Result<(), errors::Error> {
         Ok(())
     }
+    /// 将要链接后
+    pub fn on_linked(&self, idx: &BlkIndexer) {}
     /// 按索引获取交易
     pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
         if idx >= self.txs.len() {

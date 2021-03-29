@@ -168,9 +168,9 @@ impl BlkIndexer {
         Ok(Arc::new(blk))
     }
     /// 链接一个新的区块
-    /// 返回区块Id
+    /// 返回顶部区块信息
     /// 写入的数据: best,height->block id,block id->block attr,blk data,rev data
-    pub fn link(&self, blk: &Block) -> Result<Hasher, Error> {
+    pub fn link(&self, blk: &Block) -> Result<Best, Error> {
         blk.check_value()?;
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
@@ -205,8 +205,8 @@ impl BlkIndexer {
         //获取区块数据,回退数据并写入
         let blkwb = blk.bytes();
         let revwb = batch.reverse();
-        //出发事件
-        blk.on_link()?;
+        //link事件
+        blk.on_link(self, &mut batch)?;
         //写二进制数据
         attr.blk = self
             .blk
@@ -220,7 +220,9 @@ impl BlkIndexer {
         batch.put(&id.as_ref().into(), &attr);
         //批量写入
         self.idx.write(&batch, true)?;
-        Ok(id)
+        //链接成功事件
+        blk.on_linked(self);
+        Ok(best)
     }
     /// 回退一个区块,回退多个连续调用次方法
     pub fn pop(&self) -> Result<Block, Error> {
@@ -236,12 +238,14 @@ impl BlkIndexer {
         let mut batch: IBatch = buf[..].try_into()?;
         //添加删除最后一个区块
         batch.del::<Block>(&best.id.as_ref().into(), None);
-        //移除事件
-        blk.on_pop()?;
+        //pop事件
+        blk.on_pop(self, &mut batch)?;
         //删除缓存
         self.cache.pop(&best.id.as_ref().into());
         //批量写入
         self.idx.write(&batch, true)?;
+        //移除成功事件
+        blk.on_poped(self);
         Ok(blk)
     }
 }
