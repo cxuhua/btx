@@ -57,14 +57,14 @@ impl Serializer for Best {
 
 /// 区块存储属性
 #[derive(Debug)]
-pub struct HeaderAttr {
+pub struct BlkAttr {
     pub bhv: Header, //区块头
     pub hhv: u32,    //当前区块高度
     pub blk: Attr,   //数据存储位置
     pub rev: Attr,   //回退数据存储
 }
 
-impl HeaderAttr {
+impl BlkAttr {
     /// 是否包含区块数据
     pub fn has_blk(&self) -> bool {
         self.blk.is_valid()
@@ -77,9 +77,9 @@ impl HeaderAttr {
 
 /// 默认区块数据头
 /// 区块id存储的对应数据
-impl Default for HeaderAttr {
+impl Default for BlkAttr {
     fn default() -> Self {
-        HeaderAttr {
+        BlkAttr {
             bhv: Header::default(),
             hhv: 0,
             blk: Attr::default(),
@@ -88,15 +88,15 @@ impl Default for HeaderAttr {
     }
 }
 
-impl Serializer for HeaderAttr {
+impl Serializer for BlkAttr {
     fn encode(&self, wb: &mut Writer) {
         self.bhv.encode(wb);
         wb.u32(self.hhv);
         self.blk.encode(wb);
         self.rev.encode(wb);
     }
-    fn decode(r: &mut Reader) -> Result<HeaderAttr, errors::Error> {
-        let mut value = HeaderAttr::default();
+    fn decode(r: &mut Reader) -> Result<BlkAttr, errors::Error> {
+        let mut value = BlkAttr::default();
         value.bhv = r.decode()?;
         value.hhv = r.u32()?;
         value.blk = r.decode()?;
@@ -288,18 +288,6 @@ impl Serializer for Block {
 }
 
 impl Block {
-    /// 从链移除前
-    pub fn on_pop(&self, idx: &BlkIndexer, batch: &mut IBatch) -> Result<(), errors::Error> {
-        Ok(())
-    }
-    /// 从链移除后
-    pub fn on_poped(&self, idx: &BlkIndexer) {}
-    /// 将要链接前
-    pub fn on_link(&self, idx: &BlkIndexer, batch: &mut IBatch) -> Result<(), errors::Error> {
-        Ok(())
-    }
-    /// 将要链接后
-    pub fn on_linked(&self, idx: &BlkIndexer) {}
     /// 按索引获取交易
     pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
         if idx >= self.txs.len() {

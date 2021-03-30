@@ -1,8 +1,8 @@
-use crate::block::{Best, Block, Checker, HeaderAttr};
+use crate::block::{Best, BlkAttr, Block, Checker};
 use crate::bytes::IntoBytes;
 use crate::errors::Error;
 use crate::hasher::Hasher;
-use crate::iobuf::{Reader, Serializer, Writer};
+use crate::iobuf::Reader;
 use crate::leveldb::{IBatch, LevelDB};
 use crate::store::Store;
 use crate::util;
@@ -95,29 +95,39 @@ impl IKey {
 
 /// 区块链存储索引
 /// 优先从缓存获取,失败从数据库获取
-pub trait Indexer: Sized {
-    /// 根据k获取区块
-    fn get(&self, _k: &IKey) -> Option<Arc<Block>>;
-    /// 获取最高区块信息
-    /// 不存在应该是没有区块记录
-    fn best(&self) -> Option<Best>;
+pub trait IndexerEvent {
+    /// 从链移除前
+    fn on_pop(&mut self, _blk: &Block, _batch: &mut IBatch) -> Result<(), Error> {
+        Ok(())
+    }
+    /// 从链移除后
+    fn on_poped(&mut self, _blk: &Block) {}
+    /// 将要链接前
+    fn on_link(&mut self, _blk: &Block, _batch: &mut IBatch) -> Result<(), Error> {
+        Ok(())
+    }
+    /// 将要链接后
+    fn on_linked(&mut self, _blk: &Block) {}
 }
 
-pub struct BlkIndexer {
-    root: String,      //数据根目录
-    block: String,     //内容存储
-    index: String,     //索引目录
-    cache: BlkCache,   //缓存
-    idx: LevelDB,      //索引数据库指针
-    blk: Mutex<Store>, //区块存储索引
-    rev: Mutex<Store>, //回退日志存储索引
+/// 区块链数据存储索引
+pub struct BlkIndexer<'a> {
+    cache: BlkCache,                         //缓存
+    idx: LevelDB,                            //索引数据库指针
+    blk: Mutex<Store>,                       //区块存储
+    rev: Mutex<Store>,                       //回退日志存储
+    event: Option<&'a mut dyn IndexerEvent>, // 事件回调
 }
 
 /// 数据文件分布说明
 /// data  --- 数据根目录
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
-impl BlkIndexer {
+impl<'a> BlkIndexer<'a> {
+    /// 设置监听事件
+    pub fn set_event(&mut self, ob: &'a mut dyn IndexerEvent) {
+        self.event = Some(ob);
+    }
     /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
     /// 最高区块入口存储key
@@ -129,13 +139,11 @@ impl BlkIndexer {
         let blkpath = String::from(dir) + "/block";
         util::miss_create_dir(&blkpath)?;
         Ok(BlkIndexer {
-            root: String::from(dir),
-            block: blkpath.clone(),
-            index: idxpath.clone(),
             cache: BlkCache::default(),
             idx: LevelDB::open(Path::new(&idxpath))?,
             blk: Mutex::new(Store::new(dir, "blk", Self::MAX_FILE_SIZE)?),
             rev: Mutex::new(Store::new(dir, "rev", Self::MAX_FILE_SIZE)?),
+            event: None,
         })
     }
     /// 获取最高区块信息
@@ -157,20 +165,22 @@ impl BlkIndexer {
             return Ok(v);
         }
         //从数据库查询并加入缓存
-        let attr: HeaderAttr = self.idx.get(k)?;
+        let attr: BlkAttr = self.idx.get(k)?;
         //读取区块数据
-        let buf = self.blk.lock().unwrap().pull(&attr.blk)?;
+        let buf = self
+            .blk
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.pull(&attr.blk))?;
         //解析成区块
         let mut reader = Reader::new(&buf);
         let blk: Block = reader.decode()?;
         //加入缓存并返回
-        self.cache.put(k, &blk);
-        Ok(Arc::new(blk))
+        self.cache.put(k, &blk)
     }
     /// 链接一个新的区块
     /// 返回顶部区块信息
     /// 写入的数据: best,height->block id,block id->block attr,blk data,rev data
-    pub fn link(&self, blk: &Block) -> Result<Best, Error> {
+    pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
         blk.check_value()?;
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
@@ -182,11 +192,11 @@ impl BlkIndexer {
         let mut best = Best::default();
         best.id = id.clone();
         match self.best() {
-            Ok(v) => {
+            Ok(prev) => {
                 //其他区块检测上一个区块,现在也暂时直接写入//best配置写入
-                best.height = v.height + 1;
+                best.height = prev.height + 1;
                 //写入新的并保存旧的到回退数据
-                batch.replace(&Self::BEST_KEY.into(), &best, &v);
+                batch.replace(&Self::BEST_KEY.into(), &best, &prev);
             }
             Err(_) => {
                 //第一个区块符合配置的上帝区块就直接写入
@@ -197,7 +207,7 @@ impl BlkIndexer {
         //高度对应的区块id
         batch.put(&best.height.into(), &best.id);
         //id对应的区块头属性
-        let mut attr = HeaderAttr::default();
+        let mut attr = BlkAttr::default();
         //当前区块头
         attr.bhv = blk.header.clone();
         //当前区块高度
@@ -205,8 +215,10 @@ impl BlkIndexer {
         //获取区块数据,回退数据并写入
         let blkwb = blk.bytes();
         let revwb = batch.reverse();
-        //link事件
-        blk.on_link(self, &mut batch)?;
+        //link事件,写入数据之前调用
+        if let Some(ref mut ev) = self.event {
+            ev.on_link(blk, &mut batch)?;
+        }
         //写二进制数据
         attr.blk = self
             .blk
@@ -221,40 +233,61 @@ impl BlkIndexer {
         //批量写入
         self.idx.write(&batch, true)?;
         //链接成功事件
-        blk.on_linked(self);
+        if let Some(ref mut ev) = self.event {
+            ev.on_linked(blk);
+        }
         Ok(best)
     }
-    /// 回退一个区块,回退多个连续调用次方法
-    pub fn pop(&self) -> Result<Block, Error> {
+    /// 回退一个区块,回退多个连续调用此方法
+    pub fn pop(&mut self) -> Result<Block, Error> {
+        //获取区块链最高区块属性
         let best = self.best()?;
-        let attr: HeaderAttr = self.idx.get(&best.id.as_ref().into())?;
+        let attr: BlkAttr = self.idx.get(&best.id.as_ref().into())?;
         //读取区块数据
-        let buf = self.blk.lock().unwrap().pull(&attr.blk)?;
-        //解析成区块
+        let buf = self
+            .blk
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.pull(&attr.blk))?;
         let mut reader = Reader::new(&buf);
         let blk: Block = reader.decode()?;
         //读取回退数据
-        let buf = self.rev.lock().unwrap().pull(&attr.rev)?;
+        let buf = self
+            .rev
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.pull(&attr.rev))?;
         let mut batch: IBatch = buf[..].try_into()?;
-        //添加删除最后一个区块
+        //删除最后一个区块
         batch.del::<Block>(&best.id.as_ref().into(), None);
         //pop事件
-        blk.on_pop(self, &mut batch)?;
+        if let Some(ref mut ev) = self.event {
+            ev.on_pop(&blk, &mut batch)?;
+        }
         //删除缓存
         self.cache.pop(&best.id.as_ref().into());
         //批量写入
         self.idx.write(&batch, true)?;
         //移除成功事件
-        blk.on_poped(self);
+        if let Some(ref mut ev) = self.event {
+            ev.on_poped(&blk);
+        }
         Ok(blk)
     }
 }
 
 #[test]
 fn test_simple_link_pop() {
+    struct Event(u32);
+    impl IndexerEvent for Event {
+        fn on_pop(&mut self, _blk: &Block, _batch: &mut IBatch) -> Result<(), Error> {
+            self.0 += 1;
+            Ok(())
+        }
+    }
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
-    let idx = BlkIndexer::new(tmp.path().to_str().unwrap()).unwrap();
+    let mut idx = BlkIndexer::new(tmp.path().to_str().unwrap()).unwrap();
+    let mut ev = Event(0);
+    idx.set_event(&mut ev);
     for i in 0u32..=10 {
         let mut b1 = Block::default();
         b1.header.time = i;
@@ -276,6 +309,7 @@ fn test_simple_link_pop() {
         assert_eq!(10 - i, best.height);
         idx.pop().unwrap();
     }
+    assert_eq!(11, ev.0);
 }
 
 /// 线程安全的区块LRU缓存实现
@@ -303,9 +337,11 @@ impl BlkCache {
     }
     /// 加入缓存值
     /// 如果存在将返回旧值
-    pub fn put(&self, k: &IKey, v: &Block) -> Option<Arc<Block>> {
+    pub fn put(&self, k: &IKey, v: &Block) -> Result<Arc<Block>, Error> {
         let mut wl = self.lru.lock().unwrap();
-        wl.put(k.clone(), Arc::new(v.clone()))
+        let ret = Arc::new(v.clone());
+        wl.put(k.clone(), ret.clone());
+        Ok(ret.clone())
     }
     /// 从缓存获取值,不改变缓存状态
     pub fn peek<F>(&self, k: &IKey) -> Option<Arc<Block>> {
@@ -339,7 +375,7 @@ impl BlkCache {
 fn test_lru_write() {
     let c = BlkCache::default();
     let blk = Block::default();
-    c.put(&1u32.into(), &blk);
+    c.put(&1u32.into(), &blk).unwrap();
     let v = c.get(&1u32.into()).unwrap();
     let ver = v.header.get_ver();
     assert_eq!(ver, 1);
@@ -349,7 +385,7 @@ fn test_lru_write() {
 fn test_lru_cache() {
     let c = BlkCache::default();
     let blk = Block::default();
-    c.put(&1u32.into(), &blk);
+    c.put(&1u32.into(), &blk).unwrap();
     let v = c.get(&1u32.into()).unwrap();
     assert_eq!(v.as_ref(), &Block::default());
     assert_eq!(1, c.len());
@@ -366,7 +402,7 @@ fn test_lru_thread() {
     for _ in 0..10 {
         let c1 = c.clone();
         thread::spawn(move || {
-            c1.put(&1u32.into(), &Block::default());
+            c1.put(&1u32.into(), &Block::default()).unwrap();
             let v = c1.get(&1u32.into()).unwrap();
             assert_eq!(v.as_ref(), &Block::default());
             assert_eq!(1, c1.len());
