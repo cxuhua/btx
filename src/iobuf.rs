@@ -11,6 +11,12 @@ pub trait Serializer {
     fn decode(r: &mut Reader) -> Result<Self, errors::Error>
     where
         Self: Default;
+    /// 直接打包数据到writer
+    fn pack(&self) -> Writer {
+        let mut wb = Writer::default();
+        self.encode(&mut wb);
+        wb
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -24,6 +30,13 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    /// decode数据到指定类型
+    pub fn unpack<T>(buf: &[u8]) -> Result<T, errors::Error>
+    where
+        T: Serializer + Default,
+    {
+        Reader::new(buf).decode()
+    }
     /// 检测剩余字节必须>=l并返回剩余字节
     fn check(&self, l: usize) -> Result<usize, errors::Error> {
         let rl = self.remaining();

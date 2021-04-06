@@ -4,20 +4,15 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use std::fs;
 use std::path::Path;
 
+/// 如果目录丢失自动创建目录
 pub fn miss_create_dir(dir: &str) -> Result<(), Error> {
     let p = Path::new(dir);
     //目录是否存在
-    let has = match fs::metadata(p).map(|v| v.is_dir()) {
-        Ok(v) => v,
-        _ => false,
-    };
-    if has {
+    if fs::metadata(p).map_or(false, |v| v.is_dir()) {
         return Ok(());
     }
-    match fs::create_dir(&p) {
-        Ok(_) => Ok(()),
-        Err(err) => Error::std(err),
-    }
+    //创建目录
+    fs::create_dir(&p).map_or_else(Error::std, |_| Ok(()))
 }
 
 /// 获取当前时间戳

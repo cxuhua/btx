@@ -70,6 +70,10 @@ impl hash::Hash for IKey {
 }
 
 impl IKey {
+    //是否是高度key
+    pub fn is_height_key(&self) -> bool {
+        self.len() == 4
+    }
     /// key 长度
     pub fn len(&self) -> usize {
         self.0.len()
@@ -93,41 +97,19 @@ impl IKey {
     }
 }
 
-/// 区块链存储索引
-/// 优先从缓存获取,失败从数据库获取
-pub trait IndexerEvent {
-    /// 从链移除前
-    fn on_pop(&mut self, _blk: &Block, _batch: &mut IBatch) -> Result<(), Error> {
-        Ok(())
-    }
-    /// 从链移除后
-    fn on_poped(&mut self, _blk: &Block) {}
-    /// 将要链接前
-    fn on_link(&mut self, _blk: &Block, _batch: &mut IBatch) -> Result<(), Error> {
-        Ok(())
-    }
-    /// 将要链接后
-    fn on_linked(&mut self, _blk: &Block) {}
-}
-
 /// 区块链数据存储索引
-pub struct BlkIndexer<'a> {
-    cache: BlkCache,                         //缓存
-    idx: LevelDB,                            //索引数据库指针
-    blk: Mutex<Store>,                       //区块存储
-    rev: Mutex<Store>,                       //回退日志存储
-    event: Option<&'a mut dyn IndexerEvent>, // 事件回调
+pub struct BlkIndexer {
+    cache: BlkCache,   //缓存
+    idx: LevelDB,      //索引数据库指针
+    blk: Mutex<Store>, //区块存储
+    rev: Mutex<Store>, //回退日志存储
 }
 
 /// 数据文件分布说明
 /// data  --- 数据根目录
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
-impl<'a> BlkIndexer<'a> {
-    /// 设置监听事件
-    pub fn set_event(&mut self, ob: &'a mut dyn IndexerEvent) {
-        self.event = Some(ob);
-    }
+impl BlkIndexer {
     /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
     /// 最高区块入口存储key
@@ -143,7 +125,6 @@ impl<'a> BlkIndexer<'a> {
             idx: LevelDB::open(Path::new(&idxpath))?,
             blk: Mutex::new(Store::new(dir, "blk", Self::MAX_FILE_SIZE)?),
             rev: Mutex::new(Store::new(dir, "rev", Self::MAX_FILE_SIZE)?),
-            event: None,
         })
     }
     /// 获取最高区块信息
@@ -153,12 +134,12 @@ impl<'a> BlkIndexer<'a> {
         self.idx.get(&key)
     }
     /// 从索引中获取区块
+    /// 获取的区块只能读取
     pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
         //u32 height读取,对应一个hashid
-        if k.len() == 4 {
-            if let Ok(ref ik) = self.idx.get::<Hasher>(k) {
-                return self.get(&ik.into());
-            }
+        if k.is_height_key() {
+            let ref ik: Hasher = self.idx.get(k)?;
+            return self.get(&ik.into());
         }
         //如果缓存中存在
         if let Ok(v) = self.cache.get(k) {
@@ -179,8 +160,13 @@ impl<'a> BlkIndexer<'a> {
     }
     /// 链接一个新的区块
     /// 返回顶部区块信息
-    /// 写入的数据: best,height->block id,block id->block attr,blk data,rev data
-    pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
+    /// 写入的数据:
+    /// best 顶部区块id和高度
+    /// height->block id 高度对应的区块id
+    /// block id->block attr 区块id对应的区块信息
+    /// blk data 区块数据
+    /// rev data 回退数据
+    pub fn link(&self, blk: &Block) -> Result<Best, Error> {
         blk.check_value()?;
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
@@ -189,14 +175,16 @@ impl<'a> BlkIndexer<'a> {
         }
         //开始写入
         let mut batch = IBatch::new(true);
-        let mut best = Best::default();
-        best.id = id.clone();
+        let mut best = Best {
+            id: id.clone(),
+            height: u32::MAX,
+        };
         match self.best() {
             Ok(prev) => {
                 //其他区块检测上一个区块,现在也暂时直接写入//best配置写入
                 best.height = prev.height + 1;
                 //写入新的并保存旧的到回退数据
-                batch.replace(&Self::BEST_KEY.into(), &best, &prev);
+                batch.set(&Self::BEST_KEY.into(), &best, &prev);
             }
             Err(_) => {
                 //第一个区块符合配置的上帝区块就直接写入
@@ -216,10 +204,7 @@ impl<'a> BlkIndexer<'a> {
         let blkwb = blk.bytes();
         let revwb = batch.reverse();
         //link事件,写入数据之前调用
-        if let Some(ref mut ev) = self.event {
-            ev.on_link(blk, &mut batch)?;
-        }
-        //写二进制数据
+        //写二进制数据(区块内容和回退数据)
         attr.blk = self
             .blk
             .lock()
@@ -233,13 +218,11 @@ impl<'a> BlkIndexer<'a> {
         //批量写入
         self.idx.write(&batch, true)?;
         //链接成功事件
-        if let Some(ref mut ev) = self.event {
-            ev.on_linked(blk);
-        }
         Ok(best)
     }
     /// 回退一个区块,回退多个连续调用此方法
-    pub fn pop(&mut self) -> Result<Block, Error> {
+    /// 返回被回退的区块
+    pub fn pop(&self) -> Result<Block, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
         let attr: BlkAttr = self.idx.get(&best.id.as_ref().into())?;
@@ -248,8 +231,7 @@ impl<'a> BlkIndexer<'a> {
             .blk
             .lock()
             .map_or_else(Error::std, |ref mut v| v.pull(&attr.blk))?;
-        let mut reader = Reader::new(&buf);
-        let blk: Block = reader.decode()?;
+        let blk: Block = Reader::unpack(&buf)?;
         //读取回退数据
         let buf = self
             .rev
@@ -259,35 +241,20 @@ impl<'a> BlkIndexer<'a> {
         //删除最后一个区块
         batch.del::<Block>(&best.id.as_ref().into(), None);
         //pop事件
-        if let Some(ref mut ev) = self.event {
-            ev.on_pop(&blk, &mut batch)?;
-        }
         //删除缓存
         self.cache.pop(&best.id.as_ref().into());
         //批量写入
         self.idx.write(&batch, true)?;
         //移除成功事件
-        if let Some(ref mut ev) = self.event {
-            ev.on_poped(&blk);
-        }
         Ok(blk)
     }
 }
 
 #[test]
 fn test_simple_link_pop() {
-    struct Event(u32);
-    impl IndexerEvent for Event {
-        fn on_pop(&mut self, _blk: &Block, _batch: &mut IBatch) -> Result<(), Error> {
-            self.0 += 1;
-            Ok(())
-        }
-    }
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
-    let mut idx = BlkIndexer::new(tmp.path().to_str().unwrap()).unwrap();
-    let mut ev = Event(0);
-    idx.set_event(&mut ev);
+    let idx = BlkIndexer::new(tmp.path().to_str().unwrap()).unwrap();
     for i in 0u32..=10 {
         let mut b1 = Block::default();
         b1.header.time = i;
@@ -309,7 +276,6 @@ fn test_simple_link_pop() {
         assert_eq!(10 - i, best.height);
         idx.pop().unwrap();
     }
-    assert_eq!(11, ev.0);
 }
 
 /// 线程安全的区块LRU缓存实现

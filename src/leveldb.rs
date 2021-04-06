@@ -20,6 +20,12 @@ pub struct IBatch {
     f: Option<Writebatch<IKey>>,
 }
 
+impl Default for IBatch {
+    fn default() -> Self {
+        IBatch::new(false)
+    }
+}
+
 impl IBatch {
     /// 创建批处理对象
     /// rev=true会创建回退日志
@@ -41,13 +47,12 @@ impl IBatch {
     pub fn del_bytes(&mut self, k: &IKey, v: Option<&[u8]>) {
         assert!(k.len() < 0xFFFF);
         self.b.delete(k.clone());
-        if v.is_none() {
+        if v.is_none() || self.f.is_none() {
             return;
         }
-        if let Some(ref mut fv) = self.f {
-            assert!(v.unwrap().len() < 0xFFFF);
-            fv.put(k.clone(), v.unwrap())
-        }
+        let fv = &mut self.f.as_mut().unwrap();
+        assert!(v.unwrap().len() < 0xFFFF);
+        fv.put(k.clone(), v.unwrap())
     }
     /// 删除数据并按对象序列写入(如果对象存在)
     pub fn del<V>(&mut self, k: &IKey, v: Option<&V>)
@@ -56,15 +61,13 @@ impl IBatch {
     {
         assert!(k.len() < 0xFFFF);
         self.b.delete(k.clone());
-        if v.is_none() {
+        if v.is_none() || self.f.is_none() {
             return;
         }
-        if let Some(ref mut fv) = self.f {
-            let mut wb = Writer::default();
-            v.unwrap().encode(&mut wb);
-            assert!(wb.len() < 0xFFFF);
-            fv.put(k.clone(), wb.bytes())
-        }
+        let wb = v.unwrap().pack();
+        assert!(wb.len() < 0xFFFF);
+        let fv = &mut self.f.as_mut().unwrap();
+        fv.put(k.clone(), wb.bytes());
     }
     /// 添加kv数据
     fn put_bytes(&mut self, k: &IKey, v: &[u8]) {
@@ -79,8 +82,7 @@ impl IBatch {
     where
         V: Serializer,
     {
-        let mut wb = Writer::default();
-        v.encode(&mut wb);
+        let wb = v.pack();
         assert!(k.len() < 0xFFFF && wb.len() < 0xFFFF);
         self.b.put(k.clone(), wb.bytes());
         if let Some(ref mut fv) = self.f {
@@ -88,17 +90,15 @@ impl IBatch {
         }
     }
     /// 替换数据,同key放入新数据,然后旧的作为回退写入回退数据
-    pub fn replace<V>(&mut self, k: &IKey, new: &V, old: &V)
+    pub fn set<V>(&mut self, k: &IKey, new: &V, old: &V)
     where
         V: Serializer,
     {
-        let mut wb = Writer::default();
-        new.encode(&mut wb);
+        let wb = new.pack();
         assert!(k.len() < 0xFFFF && wb.len() < 0xFFFF);
         self.b.put(k.clone(), wb.bytes());
         if let Some(ref mut fv) = self.f {
-            let mut wb = Writer::default();
-            old.encode(&mut wb);
+            let wb = old.pack();
             assert!(wb.len() < 0xFFFF);
             fv.put(k.clone(), wb.bytes());
         }
@@ -172,33 +172,6 @@ impl TryFrom<&Writer> for IBatch {
     }
 }
 
-/// 从字节获取对象
-impl TryFrom<&[u8]> for IBatch {
-    type Error = Error;
-    fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
-        let mut r = Reader::new(b);
-        let mut b = IBatch::new(false);
-        while r.remaining() > 0 {
-            match r.u8()? {
-                1u8 => {
-                    let kl = r.u16()?;
-                    let kb = r.get_bytes(kl as usize)?;
-                    let vl = r.u16()?;
-                    let vv = r.get_bytes(vl as usize)?;
-                    b.put_bytes(&kb.into(), &vv);
-                }
-                2u8 => {
-                    let kl = r.u16()?;
-                    let kb = r.get_bytes(kl as usize)?;
-                    b.del_bytes(&kb.into(), None);
-                }
-                _ => return Error::msg("type byte error"),
-            }
-        }
-        Ok(b)
-    }
-}
-
 /// key或者value都不应该超过0xFFFF
 impl<'a> WritebatchIterator for IBatchIter<'a> {
     type K = IKey;
@@ -225,6 +198,33 @@ impl<'a> WritebatchIterator for IBatchIter<'a> {
         self.w.u16(k.len() as u16);
         //key
         self.w.put_bytes(k.bytes());
+    }
+}
+
+/// 从字节获取对象
+impl TryFrom<&[u8]> for IBatch {
+    type Error = Error;
+    fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
+        let mut r = Reader::new(b);
+        let mut b = IBatch::new(false);
+        while r.remaining() > 0 {
+            match r.u8()? {
+                1u8 => {
+                    let kl = r.u16()?;
+                    let kb = r.get_bytes(kl as usize)?;
+                    let vl = r.u16()?;
+                    let vv = r.get_bytes(vl as usize)?;
+                    b.put_bytes(&kb.into(), &vv);
+                }
+                2u8 => {
+                    let kl = r.u16()?;
+                    let kb = r.get_bytes(kl as usize)?;
+                    b.del_bytes(&kb.into(), None);
+                }
+                _ => return Error::msg("type byte error"),
+            }
+        }
+        Ok(b)
     }
 }
 

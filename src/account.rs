@@ -175,9 +175,12 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
-        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
-            let pb = iv.as_ref().unwrap();
-            //签名数据使用公钥内容
+        for pb in self
+            .pubs
+            .iter()
+            .filter(|v| v.is_some())
+            .map(|v| v.as_ref().unwrap())
+        {
             wb.put_bytes(&pb.into_bytes());
         }
         Ok(())
@@ -194,9 +197,12 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
-        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
-            let pb = iv.as_ref().unwrap();
-            //生成账号地址使用公钥hash
+        for pb in self
+            .pubs
+            .iter()
+            .filter(|&v| v.is_some())
+            .map(|v| v.as_ref().unwrap())
+        {
             wb.put_bytes(&pb.hash().into_bytes());
         }
         let bb = wb.bytes();
@@ -220,8 +226,8 @@ impl Account {
         if idx >= self.pris.len() {
             return errors::Error::msg("InvalidParam");
         }
-        match &self.pris[idx] {
-            Some(pk) => match pk.sign(msg) {
+        match self.pris[idx] {
+            Some(ref pk) => match pk.sign(msg) {
                 Ok(sig) => {
                     self.sigs[idx] = Some(sig);
                     return Ok(());
@@ -320,6 +326,14 @@ impl Account {
         }
         Ok(less == 0)
     }
+}
+
+#[test]
+fn test_account_encode_sign() {
+    let wb = &mut Writer::default();
+    let acc = Account::new(5, 2, false, true).unwrap();
+    acc.encode_sign(wb).unwrap();
+    assert_eq!(3 + 33 * 5, wb.bytes().len());
 }
 
 #[test]

@@ -2,9 +2,7 @@ use crate::account::Account;
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
-use crate::index::BlkIndexer;
 use crate::iobuf::{Reader, Serializer, Writer};
-use crate::leveldb::IBatch;
 use crate::merkle::MerkleTree;
 use crate::script::*;
 use crate::store::Attr;
@@ -367,7 +365,7 @@ impl Script {
                 let mut exector = Exector::new();
                 let ops = exector.exec(self, &InEnv {})?;
                 if ops > MAX_SCRIPT_OPS {
-                    return errors::Error::msg("ScriptFmtErr");
+                    return errors::Error::msg("Script opts > MAX_SCRIPT_OPS");
                 }
                 exector.check(1)?;
                 let ele = exector.top(-1);
@@ -440,6 +438,10 @@ impl Checker for Tx {
 }
 
 impl Tx {
+    /// 检查输入输出金额
+    fn check_amount(&self) -> Result<(), errors::Error> {
+        errors::Error::msg("not finish")
+    }
     /// 检测交易是否是coinbase交易
     /// 只有一个输入,并且out不指向任何一个hash
     pub fn is_coinbase(&self) -> bool {
@@ -596,6 +598,7 @@ impl TxIn {
     pub fn is_coinbase(&self) -> bool {
         self.out == Hasher::zero() && self.idx == 0
     }
+    /// 获取需要签名的数据
     fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
         wb.encode(&self.out);
         wb.u16(self.idx);
