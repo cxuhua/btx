@@ -2,6 +2,7 @@ use crate::account::Account;
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
+use crate::index::IKey;
 use crate::iobuf::{Reader, Serializer, Writer};
 use crate::merkle::MerkleTree;
 use crate::script::*;
@@ -28,6 +29,14 @@ impl Best {
     /// 是否是有效的记录
     pub fn is_valid(&self) -> bool {
         self.id != Hasher::zero() && self.height != u32::MAX
+    }
+    /// 获取idkey
+    pub fn id_key(&self) -> IKey {
+        self.id.as_ref().into()
+    }
+    /// 获取idkey
+    pub fn height_key(&self) -> IKey {
+        self.height.into()
     }
 }
 
