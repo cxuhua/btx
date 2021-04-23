@@ -2,7 +2,7 @@ use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts::{ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
 use crate::crypto::{PriKey, PubKey, SigValue};
 use crate::errors;
-use crate::hasher::Hasher;
+use crate::hasher::{Hasher, SIZE as HasherSize};
 use crate::iobuf;
 use crate::iobuf::{Reader, Writer};
 use crate::util;
@@ -136,29 +136,40 @@ impl Account {
                 }
             }
         }
+        //写入校验和数据到末尾
+        let sum = Hasher::sum(wb.bytes());
+        wb.put_bytes(sum.as_bytes());
         util::write_file(path, || wb.bytes())
     }
     /// 从文件加载数据
     pub fn load(path: &str) -> Result<Self, errors::Error> {
         util::read_file(path, |buf| {
+            if buf.len() < HasherSize {
+                return errors::Error::msg("buf too short");
+            }
             let mut reader = Reader::new(&buf);
             let num = reader.u8()?;
             let less = reader.u8()?;
             let arb = reader.u8()?;
+            //从文件加载数据
             let mut acc = Account::new(num, less, arb != 0xFF, false)?;
             for i in 0..reader.u8()? as usize {
-                if let Ok(key) = reader.get::<PubKey>() {
-                    acc.pubs[i] = Some(key);
-                } else {
-                    acc.pubs[i] = None;
+                match reader.get::<PubKey>() {
+                    Ok(key) => acc.pubs[i] = Some(key),
+                    Err(_) => acc.pubs[i] = None,
                 }
             }
             for i in 0..reader.u8()? as usize {
-                if let Ok(key) = reader.get::<PriKey>() {
-                    acc.pris[i] = Some(key);
-                } else {
-                    acc.pris[i] = None;
+                match reader.get::<PriKey>() {
+                    Ok(key) => acc.pris[i] = Some(key),
+                    Err(_) => acc.pris[i] = None,
                 }
+            }
+            //读取并检测校验和
+            let sum1 = Hasher::with_bytes(&reader.get_bytes(HasherSize)?);
+            let sum2 = Hasher::sum(&buf[0..buf.len() - HasherSize]);
+            if sum1 != sum2 {
+                return errors::Error::msg("check sum error");
             }
             if !acc.check_with_pubs() {
                 return errors::Error::msg("check with pubs error");

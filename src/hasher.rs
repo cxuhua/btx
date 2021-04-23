@@ -236,6 +236,15 @@ impl Hasher {
         cv |= s << 24;
         return cv as u32;
     }
+    ///校验和计算
+    pub fn sum(input: &[u8]) -> Self {
+        let mut sh = Sha256::new();
+        sh.update(input);
+        let shv = sh.finalize();
+        let mut inner = [0u8; SIZE];
+        inner.copy_from_slice(&shv);
+        Hasher { inner: inner }
+    }
     ///计算hash值 double sha256
     pub fn hash(input: &[u8]) -> Self {
         //1

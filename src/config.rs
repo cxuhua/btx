@@ -1,5 +1,3 @@
-///配置文件结构定义
-///
 use crate::hasher::Hasher;
 use tempdir::TempDir;
 

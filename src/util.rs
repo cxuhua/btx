@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 
-/// 写入数据到危机
+/// 写入数据到文件
 pub fn write_file<'a, F>(path: &str, f: F) -> Result<(), Error>
 where
     F: Fn() -> &'a [u8],
@@ -26,7 +26,7 @@ where
         })
 }
 
-/// 读取所有文件内容
+/// 读取所有文件
 pub fn read_file<F, R>(path: &str, f: F) -> Result<R, Error>
 where
     F: FnOnce(&mut Vec<u8>) -> Result<R, Error>,
