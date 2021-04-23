@@ -134,9 +134,6 @@ impl<'a> Reader<'a> {
         T: FromBytes,
     {
         let size = self.usize()?;
-        if size == 0 {
-            return errors::Error::msg("len zero");
-        }
         let mut vp: Vec<u8> = Vec::with_capacity(size);
         unsafe {
             vp.set_len(size);
