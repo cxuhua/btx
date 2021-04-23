@@ -115,17 +115,18 @@ impl Serializer for BlkAttr {
 /// 区块头
 #[derive(Debug)]
 pub struct Header {
-    ///区块版本 (u16,u16) = (基本时间戳倍数,版本)
+    /// 区块版本 (u16,u16) = (基本时间戳倍数,版本)
+    /// 高16位存储了时间戳倍率,低16位存储了区块版本
     pub ver: u32,
-    ///上个区块hash
+    /// 上个区块hash
     pub prev: Hasher,
-    ///莫克尔树id
+    /// 莫克尔树id
     pub merkle: Hasher,
     /// 时间戳
     pub time: u32,
-    ///区块难度
+    /// 区块难度
     pub bits: u32,
-    ///随机值
+    /// 随机值
     pub nonce: u32,
 }
 
@@ -327,6 +328,15 @@ impl Block {
     ///追加交易元素
     pub fn append(&mut self, tx: Tx) {
         self.txs.push(tx)
+    }
+    /// 创建一个新区块
+    pub fn new_block(ver: u16, bits: &Hasher) -> Self {
+        let mut blk = Block::default();
+        blk.header.bits = bits.compact();
+        blk.header.nonce = util::rand_u32();
+        blk.header.set_now_time();
+        blk.header.set_ver(ver);
+        blk
     }
 }
 

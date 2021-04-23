@@ -5,6 +5,7 @@ use crate::errors;
 use crate::hasher::Hasher;
 use crate::iobuf;
 use crate::iobuf::{Reader, Writer};
+use crate::util;
 use bech32::ToBase32;
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
@@ -22,6 +23,16 @@ pub struct Account {
     pubs: Vec<Option<PubKey>>,
     //存储的签名,有签名时存储,如果已经被对应的公钥签名时存在
     sigs: Vec<Option<SigValue>>,
+}
+
+/// 判断两个账户是否一致
+impl PartialEq for Account {
+    fn eq(&self, other: &Self) -> bool {
+        self.num == other.num
+            && self.less == other.less
+            && self.arb == other.arb
+            && self.pubs == other.pubs
+    }
 }
 
 /// 转为脚本数据,不包含私钥
@@ -84,7 +95,80 @@ fn test_account() {
     assert_eq!(true, acc.verify_with_public(1, "bbb".as_bytes()).unwrap());
 }
 
+#[test]
+fn test_account_save_load() {
+    use tempdir::TempDir;
+    let tmp = TempDir::new("account").unwrap();
+    let dir: String = tmp.path().to_str().unwrap().into();
+    let dir = dir + "/acc.dat";
+    let acc = Account::new(2, 2, false, true).unwrap();
+    acc.save(&dir).unwrap();
+    let old = Account::load(&dir).unwrap();
+    assert_eq!(acc, old);
+}
+
 impl Account {
+    ///保存到文件
+    pub fn save(&self, path: &str) -> Result<(), errors::Error> {
+        let mut wb = Writer::default();
+        wb.u8(self.num);
+        wb.u8(self.less);
+        wb.u8(self.arb);
+        wb.u8(self.pubs.len() as u8);
+        for iv in self.pubs.iter() {
+            match iv {
+                Some(v) => {
+                    wb.put(v);
+                }
+                None => {
+                    wb.usize(0);
+                }
+            }
+        }
+        wb.u8(self.pris.len() as u8);
+        for iv in self.pris.iter() {
+            match iv {
+                Some(v) => {
+                    wb.put(v);
+                }
+                None => {
+                    wb.usize(0);
+                }
+            }
+        }
+        util::write_file(path, || wb.bytes())
+    }
+    /// 从文件加载数据
+    pub fn load(path: &str) -> Result<Self, errors::Error> {
+        util::read_file(path, |buf| {
+            let mut reader = Reader::new(&buf);
+            let num = reader.u8()?;
+            let less = reader.u8()?;
+            let arb = reader.u8()?;
+            let mut acc = Account::new(num, less, arb != 0xFF, false)?;
+            for i in 0..reader.u8()? as usize {
+                if let Ok(key) = reader.get::<PubKey>() {
+                    acc.pubs[i] = Some(key);
+                } else {
+                    acc.pubs[i] = None;
+                }
+            }
+            for i in 0..reader.u8()? as usize {
+                if let Ok(key) = reader.get::<PriKey>() {
+                    acc.pris[i] = Some(key);
+                } else {
+                    acc.pris[i] = None;
+                }
+            }
+            if !acc.check_with_pubs() {
+                return errors::Error::msg("check with pubs error");
+            }
+            if !acc.check_pris_pubs() {
+                return errors::Error::msg("check with pric and pubs error");
+            }
+            Ok(acc)
+        })
+    }
     ///有效公钥数量
     pub fn pubs_size(&self) -> u8 {
         self.pubs.iter().filter(|&v| v.is_some()).count() as u8
@@ -132,6 +216,23 @@ impl Account {
             self.pris[i] = Some(pk);
             self.pubs[i] = Some(pb);
         }
+    }
+    //检测私钥对应的公钥是否正确
+    fn check_pris_pubs(&self) -> bool {
+        if self.pubs_size() != self.pris_size() {
+            return false;
+        }
+        for i in 0..self.pris.len() {
+            let eq = match (&self.pubs[i], &self.pris[i]) {
+                (None, None) => true,
+                (Some(ref pb), Some(ref pk)) => &pk.pubkey() == pb,
+                _ => false,
+            };
+            if !eq {
+                return false;
+            }
+        }
+        return true;
     }
     //从脚本获取时检测公钥和签名
     fn check_with_pubs(&self) -> bool {
