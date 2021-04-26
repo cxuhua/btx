@@ -99,11 +99,10 @@ impl IKey {
 
 /// 区块链数据存储索引
 pub struct BlkIndexer {
-    cache: BlkCache,      //缓存
-    leveldb: LevelDB,     //索引数据库指针
-    blk: Mutex<Store>,    //区块存储
-    rev: Mutex<Store>,    //回退日志存储
-    locker: Mutex<usize>, //全局锁
+    cache: BlkCache,  //缓存
+    leveldb: LevelDB, //索引数据库指针
+    blk: Store,       //区块存储
+    rev: Store,       //回退日志存储
 }
 
 /// 数据文件分布说明
@@ -124,9 +123,8 @@ impl BlkIndexer {
         Ok(BlkIndexer {
             cache: BlkCache::default(),
             leveldb: LevelDB::open(Path::new(&idxpath))?,
-            blk: Mutex::new(Store::new(dir, "blk", Self::MAX_FILE_SIZE)?),
-            rev: Mutex::new(Store::new(dir, "rev", Self::MAX_FILE_SIZE)?),
-            locker: Mutex::new(0),
+            blk: Store::new(dir, "blk", Self::MAX_FILE_SIZE)?,
+            rev: Store::new(dir, "rev", Self::MAX_FILE_SIZE)?,
         })
     }
     /// 获取最高区块信息
@@ -137,7 +135,7 @@ impl BlkIndexer {
     }
     /// 从索引中获取区块
     /// 获取的区块只能读取
-    pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
+    pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
         //u32 height读取,对应一个hashid
         if k.is_height_key() {
             let ref ik: Hasher = self.leveldb.get(k)?;
@@ -150,10 +148,7 @@ impl BlkIndexer {
         //从数据库查询并加入缓存
         let attr: BlkAttr = self.leveldb.get(k)?;
         //读取区块数据
-        let buf = self
-            .blk
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.pull(&attr.blk))?;
+        let buf = self.blk.pull(&attr.blk)?;
         //解析成区块
         let mut reader = Reader::new(&buf);
         let blk: Block = reader.decode()?;
@@ -168,10 +163,7 @@ impl BlkIndexer {
     /// block id->block attr 区块id对应的区块信息
     /// blk data 区块数据
     /// rev data 回退数据
-    pub fn link(&self, blk: &Block) -> Result<Best, Error> {
-        if self.locker.lock().is_err() {
-            return Error::msg("link locker error");
-        }
+    pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
         blk.check_value()?;
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
@@ -210,14 +202,8 @@ impl BlkIndexer {
         let blkwb = blk.bytes();
         let revwb = batch.reverse();
         //写二进制数据(区块内容和回退数据)
-        attr.blk = self
-            .blk
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.push(blkwb.bytes()))?;
-        attr.rev = self
-            .rev
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.push(revwb.bytes()))?;
+        attr.blk = self.blk.push(blkwb.bytes())?;
+        attr.rev = self.rev.push(revwb.bytes())?;
         //写入区块id对应的区块头属性,这个不会包含在回退数据中,回退时删除数据
         batch.put(&id.as_ref().into(), &attr);
         //批量写入
@@ -226,25 +212,16 @@ impl BlkIndexer {
     }
     /// 回退一个区块,回退多个连续调用此方法
     /// 返回被回退的区块
-    pub fn pop(&self) -> Result<Block, Error> {
-        if self.locker.lock().is_err() {
-            return Error::msg("pop locker error");
-        }
+    pub fn pop(&mut self) -> Result<Block, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
         let ref idkey = best.id_key();
         let attr: BlkAttr = self.leveldb.get(idkey)?;
         //读取区块数据
-        let buf = self
-            .blk
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.pull(&attr.blk))?;
+        let buf = self.blk.pull(&attr.blk)?;
         let blk: Block = Reader::unpack(&buf)?;
         //读取回退数据
-        let buf = self
-            .rev
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.pull(&attr.rev))?;
+        let buf = self.rev.pull(&attr.rev)?;
         let mut batch: IBatch = buf[..].try_into()?;
         //删除最后一个区块
         batch.del::<Block>(idkey, None);
@@ -256,6 +233,39 @@ impl BlkIndexer {
     }
 }
 
+/// 链线程安全封装
+pub struct BlkChain {
+    indexer: Mutex<BlkIndexer>,
+}
+
+impl BlkChain {
+    /// 创建指定路径存储的链
+    pub fn new(dir: &str) -> Result<Self, Error> {
+        Ok(BlkChain {
+            indexer: Mutex::new(BlkIndexer::new(dir)?),
+        })
+    }
+    /// 获取区块信息
+    /// k可以是高度或者id
+    pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
+        self.indexer
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.get(k))
+    }
+    /// 链接一个新区块到链上
+    pub fn link(&self, blk: &Block) -> Result<Best, Error> {
+        self.indexer
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.link(blk))
+    }
+    /// 弹出一个区块链接
+    pub fn pop(&self) -> Result<Block, Error> {
+        self.indexer
+            .lock()
+            .map_or_else(Error::std, |ref mut v| v.pop())
+    }
+}
+
 #[test]
 fn test_indexer_thread() {
     use std::sync::Arc;
@@ -263,7 +273,7 @@ fn test_indexer_thread() {
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
     let dir = tmp.path().to_str().unwrap();
-    let indexer = Arc::new(BlkIndexer::new(dir).unwrap());
+    let indexer = Arc::new(BlkChain::new(dir).unwrap());
     for b in 0..10 {
         let idx = indexer.clone();
         thread::spawn(move || {
@@ -284,7 +294,7 @@ fn test_simple_link_pop() {
     use tempdir::TempDir;
     let tmp = TempDir::new("db").unwrap();
     let dir = tmp.path().to_str().unwrap();
-    let idx = BlkIndexer::new(dir).unwrap();
+    let mut idx = BlkIndexer::new(dir).unwrap();
     for i in 0u32..=10 {
         let mut b1 = Block::default();
         b1.header.time = i;
@@ -310,7 +320,7 @@ fn test_simple_link_pop() {
 
 /// 线程安全的区块LRU缓存实现
 pub struct BlkCache {
-    lru: Mutex<LruCache<IKey, Arc<Block>>>,
+    lru: LruCache<IKey, Arc<Block>>,
 }
 
 impl Default for BlkCache {
@@ -323,45 +333,40 @@ impl BlkCache {
     /// 创建指定大小的lur缓存
     pub fn new(cap: usize) -> Self {
         BlkCache {
-            lru: Mutex::new(LruCache::new(cap)),
+            lru: LruCache::new(cap),
         }
     }
     /// 获取缓存长度
     pub fn len(&self) -> usize {
-        let wl = self.lru.lock().unwrap();
-        wl.len()
+        self.lru.len()
     }
     /// 加入缓存值
     /// 如果存在将返回旧值
-    pub fn put(&self, k: &IKey, v: &Block) -> Result<Arc<Block>, Error> {
-        let mut wl = self.lru.lock().unwrap();
+    pub fn put(&mut self, k: &IKey, v: &Block) -> Result<Arc<Block>, Error> {
         let ret = Arc::new(v.clone());
-        wl.put(k.clone(), ret.clone());
+        self.lru.put(k.clone(), ret.clone());
         Ok(ret.clone())
     }
     /// 从缓存获取值,不改变缓存状态
     pub fn peek<F>(&self, k: &IKey) -> Option<Arc<Block>> {
-        let wl = self.lru.lock().unwrap();
-        wl.peek(k).map(|v| v.clone())
+        self.lru.peek(k).map(|v| v.clone())
     }
 
     /// 检测指定的key是否存在
     pub fn has(&self, k: &IKey) -> bool {
-        let wl = self.lru.lock().unwrap();
-        wl.contains(k)
+        self.lru.contains(k)
     }
 
     /// 从缓存移除数据
-    pub fn pop(&self, k: &IKey) -> Option<Arc<Block>> {
-        let mut wl = self.lru.lock().unwrap();
-        wl.pop(k)
+    pub fn pop(&mut self, k: &IKey) -> Option<Arc<Block>> {
+        self.lru.pop(k)
     }
 
     /// 从缓存获取值并复制返回
     /// 复制对应的值返回
-    pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
-        let mut wl = self.lru.lock().unwrap();
-        wl.get(k)
+    pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
+        self.lru
+            .get(k)
             .map(|v| v.clone())
             .ok_or(Error::error("not found"))
     }
@@ -369,7 +374,7 @@ impl BlkCache {
 
 #[test]
 fn test_lru_write() {
-    let c = BlkCache::default();
+    let c = &mut BlkCache::default();
     let blk = Block::default();
     c.put(&1u32.into(), &blk).unwrap();
     let v = c.get(&1u32.into()).unwrap();
@@ -379,7 +384,7 @@ fn test_lru_write() {
 
 #[test]
 fn test_lru_cache() {
-    let c = BlkCache::default();
+    let c = &mut BlkCache::default();
     let blk = Block::default();
     c.put(&1u32.into(), &blk).unwrap();
     let v = c.get(&1u32.into()).unwrap();
@@ -388,21 +393,4 @@ fn test_lru_cache() {
     let v = c.pop(&1u32.into()).unwrap();
     assert_eq!(v.as_ref(), &Block::default());
     assert_eq!(0, c.len());
-}
-
-#[test]
-fn test_lru_thread() {
-    use std::sync::Arc;
-    use std::{thread, time};
-    let c = Arc::new(BlkCache::default());
-    for _ in 0..10 {
-        let c1 = c.clone();
-        thread::spawn(move || {
-            c1.put(&1u32.into(), &Block::default()).unwrap();
-            let v = c1.get(&1u32.into()).unwrap();
-            assert_eq!(v.as_ref(), &Block::default());
-            assert_eq!(1, c1.len());
-        });
-    }
-    thread::sleep(time::Duration::from_secs(1));
 }
