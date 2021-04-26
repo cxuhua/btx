@@ -1,6 +1,7 @@
 use crate::hasher::Hasher;
 use tempdir::TempDir;
 
+#[derive(Clone)]
 pub struct Config {
     /// 数据文件目录
     pub dir: String,
@@ -14,6 +15,8 @@ pub struct Config {
     pub pow_span: usize, //2016
     /// 减产配置
     pub halving: usize, //210000
+    /// 区块版本
+    pub ver: u16,
 }
 
 impl Config {
@@ -22,6 +25,7 @@ impl Config {
         let tmp = TempDir::new("btx_test_dir").unwrap();
         let dir = tmp.path().to_str().unwrap();
         Config {
+            ver: 1,
             dir: dir.into(),
             pow_limit: Hasher::must_from(
                 "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -37,6 +41,7 @@ impl Config {
     /// 发布配置
     pub fn release() -> Self {
         Config {
+            ver: 1,
             dir: "/blkdir".into(),
             pow_limit: Hasher::must_from(
                 "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",

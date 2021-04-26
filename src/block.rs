@@ -1,4 +1,5 @@
 use crate::account::Account;
+use crate::config::Config;
 use crate::consts;
 use crate::errors;
 use crate::hasher::Hasher;
@@ -330,13 +331,13 @@ impl Block {
         self.txs.push(tx)
     }
     /// 创建一个新区块
-    pub fn new_block(ver: u16, bits: &Hasher) -> Self {
+    pub fn new_block(conf: &Config) -> Result<Self, errors::Error> {
         let mut blk = Block::default();
-        blk.header.bits = bits.compact();
+        blk.header.bits = conf.pow_limit.compact();
         blk.header.nonce = util::rand_u32();
         blk.header.set_now_time();
-        blk.header.set_ver(ver);
-        blk
+        blk.header.set_ver(conf.ver);
+        Ok(blk)
     }
 }
 
