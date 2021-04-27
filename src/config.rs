@@ -22,8 +22,9 @@ pub struct Config {
 impl Config {
     /// 测试用配置
     pub fn test() -> Self {
-        let tmp = TempDir::new("btx_test_dir").unwrap();
+        let tmp = TempDir::new("btx").unwrap();
         let dir = tmp.path().to_str().unwrap();
+        println!("{}", dir);
         Config {
             ver: 1,
             dir: dir.into(),

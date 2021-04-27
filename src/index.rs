@@ -1,5 +1,6 @@
 use crate::block::{Best, BlkAttr, Block, Checker};
 use crate::bytes::IntoBytes;
+use crate::config::Config;
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::iobuf::Reader;
@@ -14,7 +15,7 @@ use std::cmp::{Eq, PartialEq};
 use std::convert::{Into, TryInto};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 #[derive(PartialEq, Eq, Clone, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
@@ -103,6 +104,7 @@ pub struct BlkIndexer {
     leveldb: LevelDB, //索引数据库指针
     blk: Store,       //区块存储
     rev: Store,       //回退日志存储
+    conf: Config,     //配置信息
 }
 
 /// 数据文件分布说明
@@ -114,28 +116,30 @@ impl BlkIndexer {
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
     /// 最高区块入口存储key
     const BEST_KEY: &'static str = "__best__key__";
-    /// 创建存储索引
-    pub fn new(dir: &str) -> Result<Self, Error> {
-        let idxpath = String::from(dir) + "/index";
-        util::miss_create_dir(&idxpath)?;
-        let blkpath = String::from(dir) + "/block";
-        util::miss_create_dir(&blkpath)?;
+    fn new(conf: &Config) -> Result<Self, Error> {
+        let dir = &conf.dir;
+        util::miss_create_dir(&dir)?;
+        let index = String::from(dir) + "/index";
+        util::miss_create_dir(&index)?;
+        let block = String::from(dir) + "/block";
+        util::miss_create_dir(&block)?;
         Ok(BlkIndexer {
             cache: BlkCache::default(),
-            leveldb: LevelDB::open(Path::new(&idxpath))?,
+            leveldb: LevelDB::open(Path::new(&index))?,
             blk: Store::new(dir, "blk", Self::MAX_FILE_SIZE)?,
             rev: Store::new(dir, "rev", Self::MAX_FILE_SIZE)?,
+            conf: conf.clone(),
         })
     }
     /// 获取最高区块信息
     /// 不存在应该是没有区块记录
-    pub fn best(&self) -> Result<Best, Error> {
+    fn best(&self) -> Result<Best, Error> {
         let key: IKey = Self::BEST_KEY.into();
         self.leveldb.get(&key)
     }
     /// 从索引中获取区块
     /// 获取的区块只能读取
-    pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
+    fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
         //u32 height读取,对应一个hashid
         if k.is_height_key() {
             let ref ik: Hasher = self.leveldb.get(k)?;
@@ -163,7 +167,7 @@ impl BlkIndexer {
     /// block id->block attr 区块id对应的区块信息
     /// blk data 区块数据
     /// rev data 回退数据
-    pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
+    fn link(&mut self, blk: &Block) -> Result<Best, Error> {
         blk.check_value()?;
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
@@ -212,7 +216,7 @@ impl BlkIndexer {
     }
     /// 回退一个区块,回退多个连续调用此方法
     /// 返回被回退的区块
-    pub fn pop(&mut self) -> Result<Block, Error> {
+    fn pop(&mut self) -> Result<Block, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
         let ref idkey = best.id_key();
@@ -234,35 +238,31 @@ impl BlkIndexer {
 }
 
 /// 链线程安全封装
-pub struct BlkChain {
-    indexer: Mutex<BlkIndexer>,
-}
+pub struct BlkChain(RwLock<BlkIndexer>);
 
 impl BlkChain {
     /// 创建指定路径存储的链
-    pub fn new(dir: &str) -> Result<Self, Error> {
-        Ok(BlkChain {
-            indexer: Mutex::new(BlkIndexer::new(dir)?),
-        })
+    pub fn new(conf: &Config) -> Result<Self, Error> {
+        Ok(BlkChain(RwLock::new(BlkIndexer::new(conf)?)))
+    }
+    /// 获取区块链顶部信息
+    pub fn best(&self) -> Result<Best, Error> {
+        self.0.write().map_or_else(Error::std, |ref mut v| v.best())
     }
     /// 获取区块信息
     /// k可以是高度或者id
     pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
-        self.indexer
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.get(k))
+        self.0.write().map_or_else(Error::std, |ref mut v| v.get(k))
     }
     /// 链接一个新区块到链上
     pub fn link(&self, blk: &Block) -> Result<Best, Error> {
-        self.indexer
-            .lock()
+        self.0
+            .write()
             .map_or_else(Error::std, |ref mut v| v.link(blk))
     }
-    /// 弹出一个区块链接
+    /// 弹出一个区块
     pub fn pop(&self) -> Result<Block, Error> {
-        self.indexer
-            .lock()
-            .map_or_else(Error::std, |ref mut v| v.pop())
+        self.0.write().map_or_else(Error::std, |ref mut v| v.pop())
     }
 }
 
@@ -270,10 +270,7 @@ impl BlkChain {
 fn test_indexer_thread() {
     use std::sync::Arc;
     use std::{thread, time};
-    use tempdir::TempDir;
-    let tmp = TempDir::new("db").unwrap();
-    let dir = tmp.path().to_str().unwrap();
-    let indexer = Arc::new(BlkChain::new(dir).unwrap());
+    let indexer = Arc::new(BlkChain::new(&Config::test()).unwrap());
     for b in 0..10 {
         let idx = indexer.clone();
         thread::spawn(move || {
@@ -291,10 +288,7 @@ fn test_indexer_thread() {
 
 #[test]
 fn test_simple_link_pop() {
-    use tempdir::TempDir;
-    let tmp = TempDir::new("db").unwrap();
-    let dir = tmp.path().to_str().unwrap();
-    let mut idx = BlkIndexer::new(dir).unwrap();
+    let idx = BlkChain::new(&Config::test()).unwrap();
     for i in 0u32..=10 {
         let mut b1 = Block::default();
         b1.header.time = i;
