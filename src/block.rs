@@ -290,7 +290,7 @@ impl Serializer for Block {
         //读取交易数量
         for _ in 0..r.u16()? {
             let tx: Tx = r.decode()?;
-            blk.txs.push(tx);
+            blk.append(tx);
         }
         Ok(blk)
     }
@@ -329,15 +329,6 @@ impl Block {
     ///追加交易元素
     pub fn append(&mut self, tx: Tx) {
         self.txs.push(tx)
-    }
-    /// 创建一个新区块
-    pub fn new_block(conf: &Config) -> Result<Self, errors::Error> {
-        let mut blk = Block::default();
-        blk.header.bits = conf.pow_limit.compact();
-        blk.header.nonce = util::rand_u32();
-        blk.header.set_now_time();
-        blk.header.set_ver(conf.ver);
-        Ok(blk)
     }
 }
 

@@ -26,7 +26,7 @@ where
         })
 }
 
-/// 读取所有文件
+/// 读取文件所有数据
 pub fn read_file<F, R>(path: &str, f: F) -> Result<R, Error>
 where
     F: FnOnce(&mut Vec<u8>) -> Result<R, Error>,

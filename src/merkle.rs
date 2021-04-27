@@ -30,7 +30,7 @@ impl MerkleTree {
         }
         height
     }
-    //结算某个高度指定位置的hash
+    //计算某个高度指定位置的hash
     fn calc_hasher(
         &mut self,
         height: usize,

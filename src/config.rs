@@ -1,4 +1,8 @@
+use crate::account::Account;
+use crate::block::Block;
+use crate::errors::Error;
 use crate::hasher::Hasher;
+use crate::util;
 use tempdir::TempDir;
 
 #[derive(Clone)]
@@ -20,11 +24,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// 创建第一个区块
+    pub fn create_genesis(&self) -> Result<Block, Error> {
+        let mut blk = Block::default();
+        blk.header.bits = self.pow_limit.compact();
+        blk.header.nonce = util::rand_u32();
+        blk.header.set_now_time();
+        blk.header.set_ver(self.ver);
+        Ok(blk)
+    }
     /// 测试用配置
     pub fn test() -> Self {
         let tmp = TempDir::new("btx").unwrap();
         let dir = tmp.path().to_str().unwrap();
-        println!("{}", dir);
         Config {
             ver: 1,
             dir: dir.into(),
@@ -55,4 +67,10 @@ impl Config {
             halving: 210000,
         }
     }
+}
+
+#[test]
+fn test_create_genesis() {
+    let blk = Config::test().create_genesis().unwrap();
+    println!("{:x?}", blk);
 }

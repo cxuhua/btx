@@ -7,6 +7,7 @@ use crate::iobuf;
 use crate::iobuf::{Reader, Writer};
 use crate::util;
 use bech32::ToBase32;
+use hex::{FromHex, ToHex};
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
 #[derive(Debug)]
@@ -107,10 +108,30 @@ fn test_account_save_load() {
     assert_eq!(acc, old);
 }
 
+#[test]
+fn test_account_hex_string() {
+    let acc1 = Account::new(2, 2, false, true).unwrap();
+    let acc2 = Account::decode_from_hex(&acc1.encode_to_hex().unwrap()).unwrap();
+    assert_eq!(acc1, acc2);
+}
+
 impl Account {
-    ///保存到文件
-    pub fn save(&self, path: &str) -> Result<(), errors::Error> {
+    /// 编码为16进制字符串
+    pub fn encode_to_hex(&self) -> Result<String, errors::Error> {
         let mut wb = Writer::default();
+        self.encode_to_writer(&mut wb)?;
+        Ok(wb.bytes().encode_hex())
+    }
+    /// 从16进制解码数据
+    pub fn decode_from_hex(value: &str) -> Result<Self, errors::Error> {
+        let buf: Result<Vec<u8>, hex::FromHexError> = Vec::from_hex(value.as_bytes());
+        buf.map_or_else(errors::Error::std, |v| {
+            let mut reader = Reader::new(&v);
+            Self::decode_from_reader(&mut reader)
+        })
+    }
+    /// 序列化账户信息到写入器
+    pub fn encode_to_writer(&self, wb: &mut Writer) -> Result<(), errors::Error> {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
@@ -136,6 +157,39 @@ impl Account {
                 }
             }
         }
+        Ok(())
+    }
+    /// 解码账户数据
+    pub fn decode_from_reader(rb: &mut Reader) -> Result<Self, errors::Error> {
+        let num = rb.u8()?;
+        let less = rb.u8()?;
+        let arb = rb.u8()?;
+        //从文件加载数据
+        let mut acc = Account::new(num, less, arb != 0xFF, false)?;
+        for i in 0..rb.u8()? as usize {
+            match rb.get::<PubKey>() {
+                Ok(key) => acc.pubs[i] = Some(key),
+                Err(_) => acc.pubs[i] = None,
+            }
+        }
+        for i in 0..rb.u8()? as usize {
+            match rb.get::<PriKey>() {
+                Ok(key) => acc.pris[i] = Some(key),
+                Err(_) => acc.pris[i] = None,
+            }
+        }
+        if !acc.check_with_pubs() {
+            return errors::Error::msg("check with pubs error");
+        }
+        if !acc.check_pris_pubs() {
+            return errors::Error::msg("check with pric and pubs error");
+        }
+        Ok(acc)
+    }
+    ///保存到文件
+    pub fn save(&self, path: &str) -> Result<(), errors::Error> {
+        let mut wb = Writer::default();
+        self.encode_to_writer(&mut wb)?;
         //写入校验和数据到末尾
         let sum = Hasher::sum(wb.bytes());
         wb.put_bytes(sum.as_bytes());
@@ -148,34 +202,12 @@ impl Account {
                 return errors::Error::msg("buf too short");
             }
             let mut reader = Reader::new(&buf);
-            let num = reader.u8()?;
-            let less = reader.u8()?;
-            let arb = reader.u8()?;
-            //从文件加载数据
-            let mut acc = Account::new(num, less, arb != 0xFF, false)?;
-            for i in 0..reader.u8()? as usize {
-                match reader.get::<PubKey>() {
-                    Ok(key) => acc.pubs[i] = Some(key),
-                    Err(_) => acc.pubs[i] = None,
-                }
-            }
-            for i in 0..reader.u8()? as usize {
-                match reader.get::<PriKey>() {
-                    Ok(key) => acc.pris[i] = Some(key),
-                    Err(_) => acc.pris[i] = None,
-                }
-            }
+            let acc = Account::decode_from_reader(&mut reader)?;
             //读取并检测校验和
             let sum1 = Hasher::with_bytes(&reader.get_bytes(HasherSize)?);
             let sum2 = Hasher::sum(&buf[0..buf.len() - HasherSize]);
             if sum1 != sum2 {
                 return errors::Error::msg("check sum error");
-            }
-            if !acc.check_with_pubs() {
-                return errors::Error::msg("check with pubs error");
-            }
-            if !acc.check_pris_pubs() {
-                return errors::Error::msg("check with pric and pubs error");
             }
             Ok(acc)
         })
