@@ -6,7 +6,7 @@ use crate::hasher::{Hasher, SIZE as HasherSize};
 use crate::iobuf;
 use crate::iobuf::{Reader, Writer};
 use crate::util;
-use bech32::ToBase32;
+use bech32::{FromBase32, ToBase32};
 use hex::{FromHex, ToHex};
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
@@ -341,6 +341,7 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
+        wb.u8(self.pubs_size() as u8);
         for pb in self
             .pubs
             .iter()
@@ -360,6 +361,20 @@ impl Account {
             Ok(addr) => return Ok(addr),
             Err(_) => return errors::Error::msg("InvalidAccount"),
         }
+    }
+    ///解码地址并返回前缀
+    pub fn decode_with_hrp(str: &str) -> Result<(String, Hasher), errors::Error> {
+        let (hpr, dat) = bech32::decode(str).map_or_else(errors::Error::std, |v| Ok(v))?;
+        let buf = Vec::<u8>::from_base32(&dat).map_or_else(errors::Error::std, |v| Ok(v))?;
+        Ok((hpr, Hasher::with_bytes(&buf)))
+    }
+    /// 解码地址并验证
+    pub fn decode(str: &str) -> Result<Hasher, errors::Error> {
+        let (hpr, id) = Self::decode_with_hrp(str)?;
+        if hpr != ADDR_HRP {
+            return errors::Error::msg("hpr not match");
+        }
+        Ok(id)
     }
     ///带固定前缀编码地址
     pub fn encode(&self) -> Result<String, errors::Error> {
