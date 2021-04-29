@@ -1,8 +1,8 @@
 use crate::account::Account;
-use crate::config::Config;
 use crate::consts;
-use crate::errors;
+use crate::errors::Error;
 use crate::hasher::Hasher;
+use crate::index::Chain;
 use crate::index::IKey;
 use crate::iobuf::{Reader, Serializer, Writer};
 use crate::merkle::MerkleTree;
@@ -16,7 +16,7 @@ const MAX_TX_COUNT: u16 = 0xFFFF;
 /// 数据检测特性
 pub trait Checker: Sized {
     /// 检测值,收到区块或者完成区块时检测区块合法性
-    fn check_value(&self) -> Result<(), errors::Error>;
+    fn check_value(&self) -> Result<(), Error>;
 }
 
 /// 最高区块描述
@@ -55,10 +55,36 @@ impl Serializer for Best {
         self.id.encode(wb);
         wb.u32(self.height);
     }
-    fn decode(r: &mut Reader) -> Result<Best, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<Best, Error> {
         let mut value = Best::default();
         value.id = r.decode()?;
         value.height = r.u32()?;
+        Ok(value)
+    }
+}
+/// 交易存储属性
+#[derive(Debug)]
+pub struct TxAttr {
+    pub blk: Hasher, //区块id
+    pub idx: u16,    //索引
+}
+impl Default for TxAttr {
+    fn default() -> Self {
+        TxAttr {
+            blk: Hasher::default(),
+            idx: 0,
+        }
+    }
+}
+impl Serializer for TxAttr {
+    fn encode(&self, wb: &mut Writer) {
+        self.blk.encode(wb);
+        wb.u16(self.idx);
+    }
+    fn decode(r: &mut Reader) -> Result<TxAttr, Error> {
+        let mut value = TxAttr::default();
+        value.blk = r.decode()?;
+        value.idx = r.u16()?;
         Ok(value)
     }
 }
@@ -103,7 +129,7 @@ impl Serializer for BlkAttr {
         self.blk.encode(wb);
         self.rev.encode(wb);
     }
-    fn decode(r: &mut Reader) -> Result<BlkAttr, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<BlkAttr, Error> {
         let mut value = BlkAttr::default();
         value.bhv = r.decode()?;
         value.hhv = r.u32()?;
@@ -176,7 +202,15 @@ impl PartialEq for Header {
 }
 
 impl Checker for Header {
-    fn check_value(&self) -> Result<(), errors::Error> {
+    fn check_value(&self) -> Result<(), Error> {
+        //检测时间戳是否正确
+        if self.get_timestamp() < util::timestamp() {
+            return Error::msg("block timestamp error");
+        }
+        //检测默克尔树id是否填充
+        if self.merkle == Hasher::zero() {
+            return Error::msg("merkle not set");
+        }
         Ok(())
     }
 }
@@ -216,7 +250,7 @@ impl Serializer for Header {
         wb.u32(self.bits);
         wb.u32(self.nonce);
     }
-    fn decode(r: &mut Reader) -> Result<Header, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<Header, Error> {
         let mut header = Header::default();
         header.ver = r.u32()?;
         header.prev = r.decode()?;
@@ -244,13 +278,14 @@ impl PartialEq for Block {
 }
 
 impl Checker for Block {
-    fn check_value(&self) -> Result<(), errors::Error> {
+    fn check_value(&self) -> Result<(), Error> {
         //检测区块头
         self.header.check_value()?;
         //检测区块区块交易
         for iv in self.txs.iter() {
             iv.check_value()?
         }
+        //检测金额是否正确 输入 > 输出
         Ok(())
     }
 }
@@ -283,7 +318,7 @@ impl Serializer for Block {
             tx.encode(wb);
         }
     }
-    fn decode(r: &mut Reader) -> Result<Block, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<Block, Error> {
         let mut blk = Block::default();
         //
         blk.header = r.decode()?;
@@ -297,15 +332,20 @@ impl Serializer for Block {
 }
 
 impl Block {
+    /// 预处理数据
+    pub fn prepare(&mut self) -> Result<(), Error> {
+        self.header.merkle = self.compute_merkle()?;
+        self.check_value()
+    }
     /// 按索引获取交易
-    pub fn get_tx(&self, idx: usize) -> Result<&Tx, errors::Error> {
+    pub fn get_tx(&self, idx: usize) -> Result<&Tx, Error> {
         if idx >= self.txs.len() {
-            return errors::Error::msg("NotFoundTx");
+            return Error::msg("NotFoundTx");
         }
         Ok(&self.txs[idx])
     }
     /// 计算区块id
-    pub fn id(&self) -> Result<Hasher, errors::Error> {
+    pub fn id(&self) -> Result<Hasher, Error> {
         let mut wb = Writer::default();
         self.header.encode(&mut wb);
         Ok(Hasher::hash(&wb.bytes()))
@@ -317,14 +357,12 @@ impl Block {
         wb
     }
     /// 计算merkle值
-    pub fn compute_merkle(&self) -> Result<Hasher, errors::Error> {
+    pub fn compute_merkle(&self) -> Result<Hasher, Error> {
         let mut ids = vec![];
         for iv in self.txs.iter() {
-            let id = iv.id()?;
-            ids.push(id);
+            ids.push(iv.id()?);
         }
-        let root = MerkleTree::compute(&ids)?;
-        Ok(root)
+        MerkleTree::compute(&ids)
     }
     ///追加交易元素
     pub fn append(&mut self, tx: Tx) {
@@ -359,7 +397,7 @@ fn test_block_time() {
 
 impl Script {
     /// 为计算id和签名写入相关数据
-    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         match self.get_type()? {
             SCRIPT_TYPE_CB | SCRIPT_TYPE_OUT => wb.put_bytes(self.bytes()),
             SCRIPT_TYPE_IN => {
@@ -368,7 +406,7 @@ impl Script {
                 //为输入脚本获取数据创建的环境,环境方法应该不会执行
                 struct InEnv {}
                 impl ExectorEnv for InEnv {
-                    fn verify_sign(&self, _: &Ele) -> Result<bool, errors::Error> {
+                    fn verify_sign(&self, _: &Ele) -> Result<bool, Error> {
                         panic!("not run here!!!");
                     }
                 }
@@ -376,7 +414,7 @@ impl Script {
                 let mut exector = Exector::new();
                 let ops = exector.exec(self, &InEnv {})?;
                 if ops > MAX_SCRIPT_OPS {
-                    return errors::Error::msg("Script opts > MAX_SCRIPT_OPS");
+                    return Error::msg("Script opts > MAX_SCRIPT_OPS");
                 }
                 exector.check(1)?;
                 let ele = exector.top(-1);
@@ -384,13 +422,13 @@ impl Script {
                 //为签名编码账户数据
                 acc.encode_sign(wb)?;
             }
-            _ => return errors::Error::msg("ScriptFmtErr"),
+            _ => return Error::msg("ScriptFmtErr"),
         }
         Ok(())
     }
     /// 区块高度
     /// 自定义数据
-    pub fn new_script_cb(height: u32, data: &[u8]) -> Result<Self, errors::Error> {
+    pub fn new_script_cb(height: u32, data: &[u8]) -> Result<Self, Error> {
         let mut script = Script::from(SCRIPT_TYPE_CB);
         script.u32(height);
         script.data(data);
@@ -398,14 +436,14 @@ impl Script {
         Ok(script)
     }
     /// 根据账号创建标准输入脚本
-    pub fn new_script_in(acc: &Account) -> Result<Self, errors::Error> {
+    pub fn new_script_in(acc: &Account) -> Result<Self, Error> {
         let mut script = Script::from(SCRIPT_TYPE_IN);
         script.put(acc);
         script.check()?;
         Ok(script)
     }
     /// 根据账户hash创建标准输出脚本
-    pub fn new_script_out(hasher: &Hasher) -> Result<Self, errors::Error> {
+    pub fn new_script_out(hasher: &Hasher) -> Result<Self, Error> {
         let mut script = Script::from(SCRIPT_TYPE_OUT);
         script.op(OP_VERIFY_INOUT);
         script.op(OP_HASHER);
@@ -429,14 +467,14 @@ pub struct Tx {
 }
 
 impl Checker for Tx {
-    fn check_value(&self) -> Result<(), errors::Error> {
+    fn check_value(&self) -> Result<(), Error> {
         //coinbase只能有一个输入
         if self.is_coinbase() && self.ins.len() != 1 {
-            return errors::Error::msg("InvalidTx");
+            return Error::msg("InvalidTx");
         }
         //输出不能为空
         if self.outs.len() == 0 {
-            return errors::Error::msg("InvalidTx");
+            return Error::msg("InvalidTx");
         }
         for iv in self.ins.iter() {
             iv.check_value()?;
@@ -450,8 +488,8 @@ impl Checker for Tx {
 
 impl Tx {
     /// 检查输入输出金额
-    fn check_amount(&self) -> Result<(), errors::Error> {
-        errors::Error::msg("not finish")
+    fn check_amount(&self) -> Result<(), Error> {
+        Error::msg("not finish")
     }
     /// 检测交易是否是coinbase交易
     /// 只有一个输入,并且out不指向任何一个hash
@@ -459,7 +497,7 @@ impl Tx {
         self.ins.len() > 0 && self.ins[0].is_coinbase()
     }
     /// 编码签名数据
-    fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+    fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.u32(self.ver);
         wb.u16(self.ins.len() as u16);
         for inv in self.ins.iter() {
@@ -472,7 +510,7 @@ impl Tx {
         Ok(())
     }
     // 获取交易id
-    pub fn id(&self) -> Result<Hasher, errors::Error> {
+    pub fn id(&self) -> Result<Hasher, Error> {
         let mut wb = Writer::default();
         self.encode_sign(&mut wb)?;
         Ok(Hasher::hash(wb.bytes()))
@@ -535,7 +573,7 @@ impl Serializer for Tx {
             out.encode(wb);
         }
     }
-    fn decode(r: &mut Reader) -> Result<Tx, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<Tx, Error> {
         let mut v = Tx::default();
         v.ver = r.u32()?;
         for _ in 0..r.u16()? {
@@ -590,27 +628,46 @@ pub struct TxIn {
 }
 
 impl Checker for TxIn {
-    fn check_value(&self) -> Result<(), errors::Error> {
+    fn check_value(&self) -> Result<(), Error> {
         //检测脚本类型,输入必须输入或者cb脚本
         let typ = self.script.get_type()?;
         if self.is_coinbase() {
             if typ != SCRIPT_TYPE_CB {
-                return errors::Error::msg("ScriptFmtErr");
+                return Error::msg("ScriptFmtErr");
             }
         } else if typ != SCRIPT_TYPE_IN {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         self.script.check()
     }
 }
 
 impl TxIn {
+    /// 获取引用的交易输出
+    pub fn get_tx_out(&self, ctx: &Chain) -> Result<TxOut, Error> {
+        if self.is_coinbase() {
+            return Error::msg("coinbase not exists txout");
+        }
+        let tx = ctx.get_tx(&self.out.as_ref().into())?;
+        if self.idx >= tx.outs.len() as u16 {
+            return Error::msg("idx outbound tx outs len");
+        }
+        Ok(tx.outs[self.idx as usize].clone())
+    }
+    /// 获取输入金额
+    pub fn get_coin(&self, ctx: &Chain) -> Result<i64, Error> {
+        //cb 没有引用的输出
+        if self.is_coinbase() {
+            return Ok(0);
+        }
+        Ok(self.get_tx_out(ctx)?.value)
+    }
     /// 是否是coinbase输入
     pub fn is_coinbase(&self) -> bool {
         self.out == Hasher::zero() && self.idx == 0
     }
     /// 获取需要签名的数据
-    fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+    fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.encode(&self.out);
         wb.u16(self.idx);
         self.script.encode_sign(wb)?;
@@ -626,7 +683,7 @@ impl Serializer for TxIn {
         wb.encode(&self.script);
         wb.u32(self.seq);
     }
-    fn decode(r: &mut Reader) -> Result<TxIn, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<TxIn, Error> {
         let mut i = TxIn::default();
         i.out = r.decode()?;
         i.idx = r.u16()?;
@@ -677,14 +734,14 @@ pub struct TxOut {
 }
 
 impl Checker for TxOut {
-    fn check_value(&self) -> Result<(), errors::Error> {
+    fn check_value(&self) -> Result<(), Error> {
         //检测金额
         if !consts::is_valid_amount(&self.value) {
-            return errors::Error::msg("InvalidAmount");
+            return Error::msg("InvalidAmount");
         }
         //检测脚本类型
         if self.script.get_type()? != SCRIPT_TYPE_OUT {
-            return errors::Error::msg("ScriptFmtErr");
+            return Error::msg("ScriptFmtErr");
         }
         //检测脚本
         self.script.check()
@@ -692,7 +749,7 @@ impl Checker for TxOut {
 }
 
 impl TxOut {
-    fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+    fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.i64(self.value);
         self.script.encode_sign(wb)?;
         Ok(())
@@ -728,7 +785,7 @@ impl Serializer for TxOut {
         w.i64(self.value);
         w.encode(&self.script);
     }
-    fn decode(r: &mut Reader) -> Result<TxOut, errors::Error> {
+    fn decode(r: &mut Reader) -> Result<TxOut, Error> {
         let mut i = TxOut::default();
         i.value = r.i64()?;
         i.script = r.decode()?;
@@ -764,7 +821,7 @@ fn test_base_inout_script() {
     //定义测试执行环境
     pub struct TestEnv {}
     impl ExectorEnv for TestEnv {
-        fn verify_sign(&self, ele: &Ele) -> Result<bool, errors::Error> {
+        fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
             let acc: Account = ele.try_into()?;
             acc.verify("aaa".as_bytes())
         }

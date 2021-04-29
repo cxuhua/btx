@@ -1,5 +1,6 @@
 use crate::bytes::{FromBytes, IntoBytes};
 use crate::errors;
+use crate::hasher::Hasher;
 use bytes::Buf;
 use bytes::BufMut;
 
@@ -36,6 +37,9 @@ impl<'a> Reader<'a> {
         T: Serializer + Default,
     {
         Reader::new(buf).decode()
+    }
+    pub fn hash(&self) -> Hasher {
+        Hasher::hash(&self.inner)
     }
     /// 检测剩余字节必须>=l并返回剩余字节
     fn check(&self, l: usize) -> Result<usize, errors::Error> {
@@ -210,6 +214,9 @@ impl Writer {
     }
     pub fn bytes(&self) -> &[u8] {
         &self.inner[..]
+    }
+    pub fn hash(&self) -> Hasher {
+        Hasher::hash(&self.inner)
     }
     pub fn reader(&self) -> Reader {
         Reader {

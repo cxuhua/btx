@@ -10,7 +10,7 @@ use bech32::{FromBase32, ToBase32};
 use hex::{FromHex, ToHex};
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Account {
     //公钥数量
     num: u8,
@@ -106,6 +106,15 @@ fn test_account_save_load() {
     acc.save(&dir).unwrap();
     let old = Account::load(&dir).unwrap();
     assert_eq!(acc, old);
+}
+
+#[test]
+fn test_encode_decode() {
+    let acc = Account::new(2, 2, false, true).unwrap();
+    let addr1 = acc.encode().unwrap();
+    let hash = Account::decode(&addr1).unwrap();
+    let addr2 = Account::encode_with_hasher(ADDR_HRP, &hash).unwrap();
+    assert_eq!(addr1, addr2)
 }
 
 #[test]
@@ -348,19 +357,23 @@ impl Account {
             .filter(|&v| v.is_some())
             .map(|v| v.as_ref().unwrap())
         {
+            //公钥hash作为账户地址的一部分
             wb.put_bytes(&pb.hash().into_bytes());
         }
-        let bb = wb.bytes();
-        Ok(Hasher::hash(bb))
+        Ok(wb.hash())
     }
     ///带前缀编码地址
-    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
-        let hv = self.hash()?;
+    pub fn encode_with_hasher(hrp: &str, hv: &Hasher) -> Result<String, errors::Error> {
         let bb = hv.as_bytes();
         match bech32::encode(hrp, bb.to_base32()) {
             Ok(addr) => return Ok(addr),
             Err(_) => return errors::Error::msg("InvalidAccount"),
         }
+    }
+    ///带前缀编码地址
+    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
+        let hv = self.hash()?;
+        Self::encode_with_hasher(hrp, &hv)
     }
     ///解码地址并返回前缀
     pub fn decode_with_hrp(str: &str) -> Result<(String, Hasher), errors::Error> {
@@ -389,15 +402,11 @@ impl Account {
             Some(ref pk) => match pk.sign(msg) {
                 Ok(sig) => {
                     self.sigs[idx] = Some(sig);
-                    return Ok(());
+                    Ok(())
                 }
-                Err(_) => {
-                    return errors::Error::msg("SignatureErr");
-                }
+                Err(_) => errors::Error::msg("SignatureErr"),
             },
-            None => {
-                return errors::Error::msg("InvalidPrivateKey");
-            }
+            None => errors::Error::msg("InvalidPrivateKey"),
         }
     }
     ///使用指定的公钥验签所有签名,如果其中一个通过返回true

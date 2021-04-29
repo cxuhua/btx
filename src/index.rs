@@ -1,9 +1,10 @@
-use crate::block::{Best, BlkAttr, Block, Checker};
+use crate::block::{Best, BlkAttr, Block, Checker, Tx, TxAttr};
 use crate::bytes::IntoBytes;
 use crate::config::Config;
+use crate::consts;
 use crate::errors::Error;
 use crate::hasher::Hasher;
-use crate::iobuf::Reader;
+use crate::iobuf::{Reader, Serializer};
 use crate::leveldb::{IBatch, LevelDB};
 use crate::store::Store;
 use crate::util;
@@ -137,6 +138,13 @@ impl BlkIndexer {
         let key: IKey = Self::BEST_KEY.into();
         self.leveldb.get(&key)
     }
+    /// 获取属性信息
+    fn attr<T>(&self, k: &IKey) -> Result<T, Error>
+    where
+        T: Serializer + Default,
+    {
+        self.leveldb.get(k)
+    }
     /// 从索引中获取区块
     /// 获取的区块只能读取
     fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
@@ -196,6 +204,14 @@ impl BlkIndexer {
         }
         //高度对应的区块id
         batch.put(&best.height.into(), &best.id);
+        //交易对应的区块信息
+        for (i, tx) in blk.txs.iter().enumerate() {
+            let iv = TxAttr {
+                blk: tx.id()?.clone(),
+                idx: i as u16,
+            };
+            batch.put(&id.as_ref().into(), &iv);
+        }
         //id对应的区块头属性
         let mut attr = BlkAttr::default();
         //当前区块头
@@ -238,31 +254,59 @@ impl BlkIndexer {
 }
 
 /// 链线程安全封装
-pub struct BlkChain(RwLock<BlkIndexer>);
+pub struct Chain(RwLock<BlkIndexer>);
 
-impl BlkChain {
+impl Chain {
+    /// lock read process
+    fn do_read<R, F>(&self, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&BlkIndexer) -> Result<R, Error>,
+    {
+        self.0.read().map_or_else(Error::std, |ref v| f(v))
+    }
+    /// lock write process
+    fn do_write<R, F>(&self, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&mut BlkIndexer) -> Result<R, Error>,
+    {
+        self.0.write().map_or_else(Error::std, |ref mut v| f(v))
+    }
     /// 创建指定路径存储的链
     pub fn new(conf: &Config) -> Result<Self, Error> {
-        Ok(BlkChain(RwLock::new(BlkIndexer::new(conf)?)))
+        Ok(Chain(RwLock::new(BlkIndexer::new(conf)?)))
     }
     /// 获取区块链顶部信息
     pub fn best(&self) -> Result<Best, Error> {
-        self.0.write().map_or_else(Error::std, |ref mut v| v.best())
+        self.do_read(|v| v.best())
+    }
+    /// 获取属性信息,不缓存
+    pub fn attr<T>(&self, k: &IKey) -> Result<T, Error>
+    where
+        T: Serializer + Default,
+    {
+        self.do_read(|v| v.attr(k))
+    }
+    /// 获取交易信息
+    pub fn get_tx(&self, k: &IKey) -> Result<Tx, Error> {
+        let attr: TxAttr = self.attr(k)?;
+        let blk = self.get(&attr.blk.as_ref().into())?;
+        if attr.idx >= blk.txs.len() as u16 {
+            return Error::msg("idx outbound block txs len");
+        }
+        Ok(blk.txs[attr.idx as usize].clone())
     }
     /// 获取区块信息
     /// k可以是高度或者id
     pub fn get(&self, k: &IKey) -> Result<Arc<Block>, Error> {
-        self.0.write().map_or_else(Error::std, |ref mut v| v.get(k))
+        self.do_write(|v| v.get(k))
     }
     /// 链接一个新区块到链上
     pub fn link(&self, blk: &Block) -> Result<Best, Error> {
-        self.0
-            .write()
-            .map_or_else(Error::std, |ref mut v| v.link(blk))
+        self.do_write(|v| v.link(blk))
     }
     /// 弹出一个区块
     pub fn pop(&self) -> Result<Block, Error> {
-        self.0.write().map_or_else(Error::std, |ref mut v| v.pop())
+        self.do_write(|v| v.pop())
     }
 }
 
@@ -270,13 +314,14 @@ impl BlkChain {
 fn test_indexer_thread() {
     use std::sync::Arc;
     use std::{thread, time};
-    let indexer = Arc::new(BlkChain::new(&Config::test()).unwrap());
+    let config = Arc::new(Config::test());
+    let indexer = Arc::new(Chain::new(&config).unwrap());
     for b in 0..10 {
         let idx = indexer.clone();
+        let conf = config.clone();
         thread::spawn(move || {
             let iv = b;
-            let mut b1 = Block::default();
-            b1.header.time = iv;
+            let b1 = conf.create_block(iv, "", consts::coin(50)).unwrap();
             idx.link(&b1).unwrap();
             let id = b1.id().unwrap();
             let b2 = idx.get(&id.as_ref().into()).unwrap();
@@ -288,20 +333,11 @@ fn test_indexer_thread() {
 
 #[test]
 fn test_simple_link_pop() {
-    let idx = BlkChain::new(&Config::test()).unwrap();
+    let config = Config::test();
+    let idx = Chain::new(&config).unwrap();
     for i in 0u32..=10 {
-        let mut b1 = Block::default();
-        b1.header.time = i;
+        let b1 = config.create_block(i, "", consts::coin(50)).unwrap();
         idx.link(&b1).unwrap();
-    }
-    for i in 0u32..=10 {
-        let mut b1 = Block::default();
-        b1.header.time = i;
-        let id = b1.id().unwrap();
-        let b2 = idx.get(&id.as_ref().into()).unwrap();
-        assert_eq!(b1, *b2);
-        let b3 = idx.get(&i.into()).unwrap();
-        assert_eq!(b1, *b3);
     }
     let best = idx.best().unwrap();
     assert_eq!(10, best.height);
@@ -355,7 +391,6 @@ impl BlkCache {
     pub fn pop(&mut self, k: &IKey) -> Option<Arc<Block>> {
         self.lru.pop(k)
     }
-
     /// 从缓存获取值并复制返回
     /// 复制对应的值返回
     pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
