@@ -32,7 +32,7 @@ impl Config {
     /// h 区块高度
     /// s coinbase信息
     /// v 奖励金额
-    pub fn create_block(&self, h: u32, s: &str, coin: i64) -> Result<Block, Error> {
+    pub fn create_block(&self, h: u32, s: &str, c: i64) -> Result<Block, Error> {
         if self.acc.is_none() {
             return Error::msg("acc option miss");
         }
@@ -53,13 +53,21 @@ impl Config {
         inv.seq = 0;
         cb.ins.push(inv);
         let mut out = TxOut::default();
-        out.value = coin;
+        out.value = c;
         out.script = Script::new_script_out(&acc.hash()?)?;
         cb.outs.push(out);
         blk.append(cb);
 
-        //完成并检测区块信息
-        blk.prepare()?;
+        blk.header.merkle = blk.compute_merkle()?;
+
+        loop {
+            let id = blk.id()?;
+            if !id.verify_pow(&self.pow_limit, blk.header.bits) {
+                blk.header.nonce += 1;
+                continue;
+            }
+            break;
+        }
         Ok(blk)
     }
     /// 测试用配置

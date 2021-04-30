@@ -132,14 +132,18 @@ impl BlkIndexer {
             conf: conf.clone(),
         })
     }
+    /// 获取当前配置
+    pub fn config(&self) -> &Config {
+        &self.conf
+    }
     /// 获取最高区块信息
     /// 不存在应该是没有区块记录
-    fn best(&self) -> Result<Best, Error> {
+    pub fn best(&self) -> Result<Best, Error> {
         let key: IKey = Self::BEST_KEY.into();
         self.leveldb.get(&key)
     }
     /// 获取属性信息
-    fn attr<T>(&self, k: &IKey) -> Result<T, Error>
+    pub fn attr<T>(&self, k: &IKey) -> Result<T, Error>
     where
         T: Serializer + Default,
     {
@@ -147,7 +151,7 @@ impl BlkIndexer {
     }
     /// 从索引中获取区块
     /// 获取的区块只能读取
-    fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
+    pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
         //u32 height读取,对应一个hashid
         if k.is_height_key() {
             let ref ik: Hasher = self.leveldb.get(k)?;
@@ -175,8 +179,7 @@ impl BlkIndexer {
     /// block id->block attr 区块id对应的区块信息
     /// blk data 区块数据
     /// rev data 回退数据
-    fn link(&mut self, blk: &Block) -> Result<Best, Error> {
-        blk.check_value()?;
+    pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
         if self.leveldb.has(key) {
@@ -204,13 +207,14 @@ impl BlkIndexer {
         }
         //高度对应的区块id
         batch.put(&best.height.into(), &best.id);
-        //交易对应的区块信息
+        //交易对应的区块信息和位置
         for (i, tx) in blk.txs.iter().enumerate() {
+            let txid = &tx.id()?;
             let iv = TxAttr {
-                blk: tx.id()?.clone(),
+                blk: txid.clone(),
                 idx: i as u16,
             };
-            batch.put(&id.as_ref().into(), &iv);
+            batch.put(&txid.into(), &iv);
         }
         //id对应的区块头属性
         let mut attr = BlkAttr::default();
@@ -232,7 +236,7 @@ impl BlkIndexer {
     }
     /// 回退一个区块,回退多个连续调用此方法
     /// 返回被回退的区块
-    fn pop(&mut self) -> Result<Block, Error> {
+    pub fn pop(&mut self) -> Result<Block, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
         let ref idkey = best.id_key();
@@ -271,6 +275,10 @@ impl Chain {
     {
         self.0.write().map_or_else(Error::std, |ref mut v| f(v))
     }
+    /// 获取当前配置
+    pub fn config(&self) -> Result<Config, Error> {
+        self.do_read(|v| Ok(v.config().clone()))
+    }
     /// 创建指定路径存储的链
     pub fn new(conf: &Config) -> Result<Self, Error> {
         Ok(Chain(RwLock::new(BlkIndexer::new(conf)?)))
@@ -302,7 +310,10 @@ impl Chain {
     }
     /// 链接一个新区块到链上
     pub fn link(&self, blk: &Block) -> Result<Best, Error> {
-        self.do_write(|v| v.link(blk))
+        self.do_write(|v| {
+            blk.check_value(v)?;
+            v.link(blk)
+        })
     }
     /// 弹出一个区块
     pub fn pop(&self) -> Result<Block, Error> {

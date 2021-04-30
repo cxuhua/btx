@@ -2,8 +2,7 @@ use crate::account::Account;
 use crate::consts;
 use crate::errors::Error;
 use crate::hasher::Hasher;
-use crate::index::Chain;
-use crate::index::IKey;
+use crate::index::{BlkIndexer, Chain, IKey};
 use crate::iobuf::{Reader, Serializer, Writer};
 use crate::merkle::MerkleTree;
 use crate::script::*;
@@ -16,7 +15,8 @@ const MAX_TX_COUNT: u16 = 0xFFFF;
 /// 数据检测特性
 pub trait Checker: Sized {
     /// 检测值,收到区块或者完成区块时检测区块合法性
-    fn check_value(&self) -> Result<(), Error>;
+    /// check_value 在链入区块链的时候执行检测,在安全的线程内执行
+    fn check_value(&self, _: &BlkIndexer) -> Result<(), Error>;
 }
 
 /// 最高区块描述
@@ -202,7 +202,7 @@ impl PartialEq for Header {
 }
 
 impl Checker for Header {
-    fn check_value(&self) -> Result<(), Error> {
+    fn check_value(&self, _: &BlkIndexer) -> Result<(), Error> {
         //检测时间戳是否正确
         if self.get_timestamp() < util::timestamp() {
             return Error::msg("block timestamp error");
@@ -273,19 +273,25 @@ pub struct Block {
 
 impl PartialEq for Block {
     fn eq(&self, other: &Block) -> bool {
-        self.header == other.header && self.txs.len() == other.txs.len()
+        self.header == other.header && self.txs == other.txs
     }
 }
 
 impl Checker for Block {
-    fn check_value(&self) -> Result<(), Error> {
+    fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
+        let conf = ctx.config();
         //检测区块头
-        self.header.check_value()?;
+        self.header.check_value(ctx)?;
         //检测区块区块交易
         for iv in self.txs.iter() {
-            iv.check_value()?
+            iv.check_value(ctx)?
         }
         //检测金额是否正确 输入 > 输出
+        //检测工作难度是否达到设置的要求
+        let id = self.id()?;
+        if !id.verify_pow(&conf.pow_limit, self.header.bits) {
+            return Error::msg("block bits error");
+        }
         Ok(())
     }
 }
@@ -332,10 +338,10 @@ impl Serializer for Block {
 }
 
 impl Block {
-    /// 预处理数据
-    pub fn prepare(&mut self) -> Result<(), Error> {
+    /// 检测连入区块前调用
+    pub fn finish(&mut self) -> Result<(), Error> {
         self.header.merkle = self.compute_merkle()?;
-        self.check_value()
+        Ok(())
     }
     /// 按索引获取交易
     pub fn get_tx(&self, idx: usize) -> Result<&Tx, Error> {
@@ -467,7 +473,7 @@ pub struct Tx {
 }
 
 impl Checker for Tx {
-    fn check_value(&self) -> Result<(), Error> {
+    fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
         //coinbase只能有一个输入
         if self.is_coinbase() && self.ins.len() != 1 {
             return Error::msg("InvalidTx");
@@ -477,10 +483,10 @@ impl Checker for Tx {
             return Error::msg("InvalidTx");
         }
         for iv in self.ins.iter() {
-            iv.check_value()?;
+            iv.check_value(ctx)?;
         }
         for iv in self.outs.iter() {
-            iv.check_value()?
+            iv.check_value(ctx)?
         }
         Ok(())
     }
@@ -628,7 +634,7 @@ pub struct TxIn {
 }
 
 impl Checker for TxIn {
-    fn check_value(&self) -> Result<(), Error> {
+    fn check_value(&self, _ctx: &BlkIndexer) -> Result<(), Error> {
         //检测脚本类型,输入必须输入或者cb脚本
         let typ = self.script.get_type()?;
         if self.is_coinbase() {
@@ -734,7 +740,7 @@ pub struct TxOut {
 }
 
 impl Checker for TxOut {
-    fn check_value(&self) -> Result<(), Error> {
+    fn check_value(&self, _ctx: &BlkIndexer) -> Result<(), Error> {
         //检测金额
         if !consts::is_valid_amount(&self.value) {
             return Error::msg("InvalidAmount");

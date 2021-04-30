@@ -197,10 +197,10 @@ impl Hasher {
         return self.compact();
     }
     ///工作量证明检测
-    pub fn verify_pow(&self, limit: &Hasher, bits: u32) -> bool {
+    pub fn verify_pow(&self, pl: &Hasher, bits: u32) -> bool {
         if let Ok(v) = Hasher::try_from(bits) {
             //如果比最小难度大
-            if &v > limit {
+            if &v > pl {
                 return false;
             }
             return self <= &v;
