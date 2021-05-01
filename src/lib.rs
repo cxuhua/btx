@@ -3,6 +3,7 @@
 pub mod account;
 pub mod block;
 pub mod bytes;
+pub mod config;
 pub mod consts;
 pub mod crypto;
 pub mod errors;

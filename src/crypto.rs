@@ -74,7 +74,7 @@ impl IntoBytes for SigValue {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct PubKey {
     inner: PublicKey,
 }

@@ -197,10 +197,10 @@ impl Hasher {
         return self.compact();
     }
     ///工作量证明检测
-    pub fn verify_pow(&self, limit: &Hasher, bits: u32) -> bool {
+    pub fn verify_pow(&self, pl: &Hasher, bits: u32) -> bool {
         if let Ok(v) = Hasher::try_from(bits) {
             //如果比最小难度大
-            if &v > limit {
+            if &v > pl {
                 return false;
             }
             return self <= &v;
@@ -236,6 +236,15 @@ impl Hasher {
         cv |= s << 24;
         return cv as u32;
     }
+    ///校验和计算
+    pub fn sum(input: &[u8]) -> Self {
+        let mut sh = Sha256::new();
+        sh.update(input);
+        let shv = sh.finalize();
+        let mut inner = [0u8; SIZE];
+        inner.copy_from_slice(&shv);
+        Hasher { inner: inner }
+    }
     ///计算hash值 double sha256
     pub fn hash(input: &[u8]) -> Self {
         //1
@@ -268,6 +277,9 @@ impl Hasher {
     }
     pub fn as_bytes(&self) -> &[u8] {
         &self.inner
+    }
+    pub fn must_from(hex: &str) -> Self {
+        Hasher::try_from(hex).unwrap()
     }
 }
 

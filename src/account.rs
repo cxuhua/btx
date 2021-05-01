@@ -2,13 +2,15 @@ use crate::bytes::{FromBytes, IntoBytes};
 use crate::consts::{ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
 use crate::crypto::{PriKey, PubKey, SigValue};
 use crate::errors;
-use crate::hasher::Hasher;
+use crate::hasher::{Hasher, SIZE as HasherSize};
 use crate::iobuf;
 use crate::iobuf::{Reader, Writer};
-use bech32::ToBase32;
+use crate::util;
+use bech32::{FromBase32, ToBase32};
+use hex::{FromHex, ToHex};
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Account {
     //公钥数量
     num: u8,
@@ -22,6 +24,16 @@ pub struct Account {
     pubs: Vec<Option<PubKey>>,
     //存储的签名,有签名时存储,如果已经被对应的公钥签名时存在
     sigs: Vec<Option<SigValue>>,
+}
+
+/// 判断两个账户是否一致
+impl PartialEq for Account {
+    fn eq(&self, other: &Self) -> bool {
+        self.num == other.num
+            && self.less == other.less
+            && self.arb == other.arb
+            && self.pubs == other.pubs
+    }
 }
 
 /// 转为脚本数据,不包含私钥
@@ -84,7 +96,131 @@ fn test_account() {
     assert_eq!(true, acc.verify_with_public(1, "bbb".as_bytes()).unwrap());
 }
 
+#[test]
+fn test_account_save_load() {
+    use tempdir::TempDir;
+    let tmp = TempDir::new("account").unwrap();
+    let dir: String = tmp.path().to_str().unwrap().into();
+    let dir = dir + "/acc.dat";
+    let acc = Account::new(2, 2, false, true).unwrap();
+    acc.save(&dir).unwrap();
+    let old = Account::load(&dir).unwrap();
+    assert_eq!(acc, old);
+}
+
+#[test]
+fn test_encode_decode() {
+    let acc = Account::new(2, 2, false, true).unwrap();
+    let addr1 = acc.encode().unwrap();
+    let hash = Account::decode(&addr1).unwrap();
+    let addr2 = Account::encode_with_hasher(ADDR_HRP, &hash).unwrap();
+    assert_eq!(addr1, addr2)
+}
+
+#[test]
+fn test_account_hex_string() {
+    let acc1 = Account::new(2, 2, false, true).unwrap();
+    let acc2 = Account::decode_from_hex(&acc1.encode_to_hex().unwrap()).unwrap();
+    assert_eq!(acc1, acc2);
+}
+
 impl Account {
+    /// 编码为16进制字符串
+    pub fn encode_to_hex(&self) -> Result<String, errors::Error> {
+        let mut wb = Writer::default();
+        self.encode_to_writer(&mut wb)?;
+        Ok(wb.bytes().encode_hex())
+    }
+    /// 从16进制解码数据
+    pub fn decode_from_hex(value: &str) -> Result<Self, errors::Error> {
+        let buf: Result<Vec<u8>, hex::FromHexError> = Vec::from_hex(value.as_bytes());
+        buf.map_or_else(errors::Error::std, |v| {
+            let mut reader = Reader::new(&v);
+            Self::decode_from_reader(&mut reader)
+        })
+    }
+    /// 序列化账户信息到写入器
+    pub fn encode_to_writer(&self, wb: &mut Writer) -> Result<(), errors::Error> {
+        wb.u8(self.num);
+        wb.u8(self.less);
+        wb.u8(self.arb);
+        wb.u8(self.pubs.len() as u8);
+        for iv in self.pubs.iter() {
+            match iv {
+                Some(v) => {
+                    wb.put(v);
+                }
+                None => {
+                    wb.usize(0);
+                }
+            }
+        }
+        wb.u8(self.pris.len() as u8);
+        for iv in self.pris.iter() {
+            match iv {
+                Some(v) => {
+                    wb.put(v);
+                }
+                None => {
+                    wb.usize(0);
+                }
+            }
+        }
+        Ok(())
+    }
+    /// 解码账户数据
+    pub fn decode_from_reader(rb: &mut Reader) -> Result<Self, errors::Error> {
+        let num = rb.u8()?;
+        let less = rb.u8()?;
+        let arb = rb.u8()?;
+        //从文件加载数据
+        let mut acc = Account::new(num, less, arb != 0xFF, false)?;
+        for i in 0..rb.u8()? as usize {
+            match rb.get::<PubKey>() {
+                Ok(key) => acc.pubs[i] = Some(key),
+                Err(_) => acc.pubs[i] = None,
+            }
+        }
+        for i in 0..rb.u8()? as usize {
+            match rb.get::<PriKey>() {
+                Ok(key) => acc.pris[i] = Some(key),
+                Err(_) => acc.pris[i] = None,
+            }
+        }
+        if !acc.check_with_pubs() {
+            return errors::Error::msg("check with pubs error");
+        }
+        if !acc.check_pris_pubs() {
+            return errors::Error::msg("check with pric and pubs error");
+        }
+        Ok(acc)
+    }
+    ///保存到文件
+    pub fn save(&self, path: &str) -> Result<(), errors::Error> {
+        let mut wb = Writer::default();
+        self.encode_to_writer(&mut wb)?;
+        //写入校验和数据到末尾
+        let sum = Hasher::sum(wb.bytes());
+        wb.put_bytes(sum.as_bytes());
+        util::write_file(path, || wb.bytes())
+    }
+    /// 从文件加载数据
+    pub fn load(path: &str) -> Result<Self, errors::Error> {
+        util::read_file(path, |buf| {
+            if buf.len() < HasherSize {
+                return errors::Error::msg("buf too short");
+            }
+            let mut reader = Reader::new(&buf);
+            let acc = Account::decode_from_reader(&mut reader)?;
+            //读取并检测校验和
+            let sum1 = Hasher::with_bytes(&reader.get_bytes(HasherSize)?);
+            let sum2 = Hasher::sum(&buf[0..buf.len() - HasherSize]);
+            if sum1 != sum2 {
+                return errors::Error::msg("check sum error");
+            }
+            Ok(acc)
+        })
+    }
     ///有效公钥数量
     pub fn pubs_size(&self) -> u8 {
         self.pubs.iter().filter(|&v| v.is_some()).count() as u8
@@ -133,6 +269,23 @@ impl Account {
             self.pubs[i] = Some(pb);
         }
     }
+    //检测私钥对应的公钥是否正确
+    fn check_pris_pubs(&self) -> bool {
+        if self.pubs_size() != self.pris_size() {
+            return false;
+        }
+        for i in 0..self.pris.len() {
+            let eq = match (&self.pubs[i], &self.pris[i]) {
+                (None, None) => true,
+                (Some(ref pb), Some(ref pk)) => &pk.pubkey() == pb,
+                _ => false,
+            };
+            if !eq {
+                return false;
+            }
+        }
+        return true;
+    }
     //从脚本获取时检测公钥和签名
     fn check_with_pubs(&self) -> bool {
         if !self.check() {
@@ -175,9 +328,12 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
-        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
-            let pb = iv.as_ref().unwrap();
-            //签名数据使用公钥内容
+        for pb in self
+            .pubs
+            .iter()
+            .filter(|v| v.is_some())
+            .map(|v| v.as_ref().unwrap())
+        {
             wb.put_bytes(&pb.into_bytes());
         }
         Ok(())
@@ -194,22 +350,44 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
-        for iv in self.pubs.iter().filter(|&v| v.is_some()) {
-            let pb = iv.as_ref().unwrap();
-            //生成账号地址使用公钥hash
+        wb.u8(self.pubs_size() as u8);
+        for pb in self
+            .pubs
+            .iter()
+            .filter(|&v| v.is_some())
+            .map(|v| v.as_ref().unwrap())
+        {
+            //公钥hash作为账户地址的一部分
             wb.put_bytes(&pb.hash().into_bytes());
         }
-        let bb = wb.bytes();
-        Ok(Hasher::hash(bb))
+        Ok(wb.hash())
     }
     ///带前缀编码地址
-    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
-        let hv = self.hash()?;
+    pub fn encode_with_hasher(hrp: &str, hv: &Hasher) -> Result<String, errors::Error> {
         let bb = hv.as_bytes();
         match bech32::encode(hrp, bb.to_base32()) {
             Ok(addr) => return Ok(addr),
             Err(_) => return errors::Error::msg("InvalidAccount"),
         }
+    }
+    ///带前缀编码地址
+    pub fn encode_with_hrp(&self, hrp: &str) -> Result<String, errors::Error> {
+        let hv = self.hash()?;
+        Self::encode_with_hasher(hrp, &hv)
+    }
+    ///解码地址并返回前缀
+    pub fn decode_with_hrp(str: &str) -> Result<(String, Hasher), errors::Error> {
+        let (hpr, dat) = bech32::decode(str).map_or_else(errors::Error::std, |v| Ok(v))?;
+        let buf = Vec::<u8>::from_base32(&dat).map_or_else(errors::Error::std, |v| Ok(v))?;
+        Ok((hpr, Hasher::with_bytes(&buf)))
+    }
+    /// 解码地址并验证
+    pub fn decode(str: &str) -> Result<Hasher, errors::Error> {
+        let (hpr, id) = Self::decode_with_hrp(str)?;
+        if hpr != ADDR_HRP {
+            return errors::Error::msg("hpr not match");
+        }
+        Ok(id)
     }
     ///带固定前缀编码地址
     pub fn encode(&self) -> Result<String, errors::Error> {
@@ -220,19 +398,15 @@ impl Account {
         if idx >= self.pris.len() {
             return errors::Error::msg("InvalidParam");
         }
-        match &self.pris[idx] {
-            Some(pk) => match pk.sign(msg) {
+        match self.pris[idx] {
+            Some(ref pk) => match pk.sign(msg) {
                 Ok(sig) => {
                     self.sigs[idx] = Some(sig);
-                    return Ok(());
+                    Ok(())
                 }
-                Err(_) => {
-                    return errors::Error::msg("SignatureErr");
-                }
+                Err(_) => errors::Error::msg("SignatureErr"),
             },
-            None => {
-                return errors::Error::msg("InvalidPrivateKey");
-            }
+            None => errors::Error::msg("InvalidPrivateKey"),
         }
     }
     ///使用指定的公钥验签所有签名,如果其中一个通过返回true
@@ -320,6 +494,14 @@ impl Account {
         }
         Ok(less == 0)
     }
+}
+
+#[test]
+fn test_account_encode_sign() {
+    let wb = &mut Writer::default();
+    let acc = Account::new(5, 2, false, true).unwrap();
+    acc.encode_sign(wb).unwrap();
+    assert_eq!(3 + 33 * 5, wb.bytes().len());
 }
 
 #[test]

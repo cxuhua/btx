@@ -4,6 +4,10 @@ pub const PK_HRP: &str = "pk";
 pub const ADDR_HRP: &str = "btx";
 /// 一个coin的缩放比例
 pub const COIN: i64 = 1000000;
+/// 获取coin
+pub fn coin(c: usize) -> i64 {
+    c as i64 * COIN
+}
 /// 最大金额
 pub const MAX_MONEY: i64 = 21000000 * COIN;
 /// 账户最大密钥数
