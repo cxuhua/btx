@@ -1,7 +1,6 @@
 use crate::block::{Best, BlkAttr, Block, Checker, Tx, TxAttr};
 use crate::bytes::IntoBytes;
 use crate::config::Config;
-use crate::consts;
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::iobuf::{Reader, Serializer};
@@ -323,6 +322,7 @@ impl Chain {
 
 #[test]
 fn test_indexer_thread() {
+    use crate::consts;
     use std::sync::Arc;
     use std::{thread, time};
     let config = Arc::new(Config::test());
@@ -344,6 +344,7 @@ fn test_indexer_thread() {
 
 #[test]
 fn test_simple_link_pop() {
+    use crate::consts;
     let config = Config::test();
     let idx = Chain::new(&config).unwrap();
     for i in 0u32..=10 {

@@ -380,13 +380,6 @@ impl Store {
 }
 #[test]
 fn test_all_store() {
-    fn aa() -> u32 {
-        let a = Some(32u32);
-        a?
-    }
-
-    let b = aa();
-
     use tempdir::TempDir;
     let tmp = TempDir::new("store").unwrap();
     let dir = tmp.path().to_str().unwrap();
