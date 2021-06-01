@@ -27,6 +27,16 @@ pub struct Config {
 }
 
 impl Config {
+    /// 创建一个默认配置的区块
+    pub fn new_block(&self) -> Result<Block, Error> {
+        let mut blk = Block::default();
+        //设置区块头
+        blk.header.bits = self.pow_limit.compact();
+        blk.header.nonce = util::rand_u32();
+        blk.header.set_now_time();
+        blk.header.set_ver(self.ver);
+        Ok(blk)
+    }
     /// 创建第一个区块
     /// h 区块高度
     /// s coinbase信息
@@ -36,21 +46,18 @@ impl Config {
             return Error::msg("acc option miss");
         }
         let acc = self.acc.as_ref().unwrap();
-        let mut blk = Block::default();
-        //设置区块头
-        blk.header.bits = self.pow_limit.compact();
-        blk.header.nonce = util::rand_u32();
-        blk.header.set_now_time();
-        blk.header.set_ver(self.ver);
+        let mut blk = self.new_block()?;
         //创建coinbase交易
         let mut cb = Tx::default();
         cb.ver = 1;
+        //交易输入
         let mut inv = TxIn::default();
         inv.out = Hasher::zero();
         inv.idx = 0;
         inv.script = Script::new_script_cb(h, s.as_ref())?;
         inv.seq = 0;
         cb.ins.push(inv);
+        //交易输出
         let mut out = TxOut::default();
         out.value = c;
         out.script = Script::new_script_out(&acc.hash()?)?;

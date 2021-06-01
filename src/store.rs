@@ -286,8 +286,7 @@ impl Store {
     }
     /// 获取当前最大的写入文件
     fn curr_file(&self) -> Result<&StoreFile, Error> {
-        self.cache_file(self.idx)
-            .map_or(Error::msg("not found max file"), |v| Ok(v))
+        self.cache_file(self.idx).ok_or(Error::error("not bound"))
     }
     /// 检测是否切换到下个文件
     /// 返回写入前的位置
