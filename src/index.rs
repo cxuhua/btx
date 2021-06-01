@@ -394,7 +394,7 @@ impl BlkCache {
     }
 
     /// 检测指定的key是否存在
-    pub fn has(&self, k: &IKey) -> bool {
+    pub fn contains(&self, k: &IKey) -> bool {
         self.lru.contains(k)
     }
 

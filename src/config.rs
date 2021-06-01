@@ -1,6 +1,5 @@
 use crate::account::Account;
-use crate::block::{Block, Checker, Tx, TxIn, TxOut};
-use crate::consts;
+use crate::block::{Block, Tx, TxIn, TxOut};
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::script::Script;
@@ -57,16 +56,18 @@ impl Config {
         out.script = Script::new_script_out(&acc.hash()?)?;
         cb.outs.push(out);
         blk.append(cb);
-
+        //计算默克尔树
         blk.header.merkle = blk.compute_merkle()?;
-
-        loop {
-            let id = blk.id()?;
-            if !id.verify_pow(&self.pow_limit, blk.header.bits) {
-                blk.header.nonce += 1;
-                continue;
-            }
-            break;
+        //计算工作量
+        let mut id = blk.id()?;
+        let mut count = 0;
+        while !id.verify_pow(&self.pow_limit, blk.header.bits) && count < 1024 * 1024 {
+            blk.header.nonce += 1;
+            id = blk.id()?;
+            count += 1;
+        }
+        if !id.verify_pow(&self.pow_limit, blk.header.bits) {
+            return Error::msg("compute pow failed");
         }
         Ok(blk)
     }
@@ -112,8 +113,9 @@ impl Config {
 
 #[test]
 fn test_create_genesis() {
+    use crate::consts;
     let blk = Config::test()
         .create_block(0, "f1", consts::coin(50))
         .unwrap();
-    println!("{:x?}", blk);
+    println!("{}", blk.id().unwrap());
 }
