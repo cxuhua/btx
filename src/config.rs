@@ -48,17 +48,11 @@ impl Config {
         blk.header.set_ver(self.ver);
         Ok(blk)
     }
-    /// 创建第一个区块
+    /// 创建coinbase交易
     /// h 区块高度
-    /// s coinbase信息
-    /// v 奖励金额
-    pub fn create_block(&self, h: u32, s: &str, c: i64) -> Result<Block, Error> {
-        if self.acc.is_none() {
-            return Error::msg("acc option miss");
-        }
-        let acc = self.acc.as_ref().unwrap();
-        let mut blk = self.new_block()?;
-        //创建coinbase交易
+    /// s coinbase自定义数据
+    /// acc 输出账号
+    pub fn new_coinbase(&self, h: u32, s: &str, acc: &Account) -> Result<Tx, Error> {
         let mut cb = Tx::default();
         cb.ver = 1;
         //交易输入
@@ -70,9 +64,23 @@ impl Config {
         cb.ins.push(inv);
         //交易输出
         let mut out = TxOut::default();
-        out.value = c;
+        out.value = self.compute_reward(h);
         out.script = Script::new_script_out(&acc.hash()?)?;
         cb.outs.push(out);
+        Ok(cb)
+    }
+    /// 创建第一个区块
+    /// h 区块高度
+    /// s coinbase信息
+    /// v 奖励金额
+    pub fn create_block(&self, h: u32, s: &str) -> Result<Block, Error> {
+        if self.acc.is_none() {
+            return Error::msg("acc option miss");
+        }
+        let acc = self.acc.as_ref().unwrap();
+        let mut blk = self.new_block()?;
+        //创建coinbase交易
+        let cb = self.new_coinbase(h, s, &acc)?;
         blk.append(cb);
         //计算默克尔树
         blk.finish()?;
@@ -131,9 +139,6 @@ impl Config {
 
 #[test]
 fn test_create_genesis() {
-    use crate::consts;
-    let blk = Config::test()
-        .create_block(0, "f1", consts::coin(50))
-        .unwrap();
+    let blk = Config::test().create_block(0, "f1").unwrap();
     println!("{}", blk.id().unwrap());
 }

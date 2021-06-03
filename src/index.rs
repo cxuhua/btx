@@ -322,7 +322,6 @@ impl Chain {
 
 #[test]
 fn test_indexer_thread() {
-    use crate::consts;
     use std::sync::Arc;
     use std::{thread, time};
     let config = Arc::new(Config::test());
@@ -332,7 +331,7 @@ fn test_indexer_thread() {
         let conf = config.clone();
         thread::spawn(move || {
             let iv = b;
-            let b1 = conf.create_block(iv, "", consts::coin(50)).unwrap();
+            let b1 = conf.create_block(iv, "").unwrap();
             idx.link(&b1).unwrap();
             let id = b1.id().unwrap();
             let b2 = idx.get(&id.as_ref().into()).unwrap();
@@ -344,11 +343,10 @@ fn test_indexer_thread() {
 
 #[test]
 fn test_simple_link_pop() {
-    use crate::consts;
     let config = Config::test();
     let idx = Chain::new(&config).unwrap();
     for i in 0u32..=10 {
-        let b1 = config.create_block(i, "", consts::coin(50)).unwrap();
+        let b1 = config.create_block(i, "").unwrap();
         idx.link(&b1).unwrap();
     }
     let best = idx.best().unwrap();
