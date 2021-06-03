@@ -750,7 +750,7 @@ pub struct TxOut {
 impl Checker for TxOut {
     fn check_value(&self, _ctx: &BlkIndexer) -> Result<(), Error> {
         //检测金额
-        if !consts::is_valid_amount(&self.value) {
+        if !consts::is_valid_amount(self.value) {
             return Error::msg("InvalidAmount");
         }
         //检测脚本类型
