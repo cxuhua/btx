@@ -269,6 +269,7 @@ pub struct Block {
     pub header: Header,
     ///交易列表
     pub txs: Vec<Tx>,
+    finish: bool,
 }
 
 impl PartialEq for Block {
@@ -301,6 +302,7 @@ impl Default for Block {
         Block {
             header: Header::default(),
             txs: vec![],
+            finish: false,
         }
     }
 }
@@ -310,6 +312,7 @@ impl Clone for Block {
         Block {
             header: self.header.clone(),
             txs: self.txs.clone(),
+            finish: self.finish,
         }
     }
 }
@@ -338,9 +341,14 @@ impl Serializer for Block {
 }
 
 impl Block {
+    /// 区块是否调用完成
+    pub fn is_finish(&self) -> bool {
+        self.finish
+    }
     /// 检测连入区块前调用
     pub fn finish(&mut self) -> Result<(), Error> {
         self.header.merkle = self.compute_merkle()?;
+        self.finish = true;
         Ok(())
     }
     /// 按索引获取交易

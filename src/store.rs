@@ -319,7 +319,7 @@ impl Store {
     /// 创建区块存储器
     pub fn new(dir: &str, ext: &str, max: u32) -> Result<Self, Error> {
         let dir: String = dir.into();
-        util::miss_create_dir(&dir)?;
+        util::create_miss_dir(&dir)?;
         let sf = StoreFile::init_file(&dir, ext, max)?;
         Ok(Store {
             idx: sf.idx,

@@ -57,7 +57,7 @@ fn test_rand_u32() {
 }
 
 /// 如果目录丢失自动创建目录
-pub fn miss_create_dir(dir: &str) -> Result<(), Error> {
+pub fn create_miss_dir(dir: &str) -> Result<(), Error> {
     let p = Path::new(dir);
     //目录是否存在
     if fs::metadata(p).map_or(false, |v| v.is_dir()) {

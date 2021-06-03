@@ -1,5 +1,6 @@
 use crate::account::Account;
 use crate::block::{Block, Tx, TxIn, TxOut};
+use crate::consts;
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::script::Script;
@@ -27,6 +28,16 @@ pub struct Config {
 }
 
 impl Config {
+    /// 计算某高度下可获的奖励
+    pub fn compute_reward(&self, h: u32) -> i64 {
+        let hlv = (h as usize) / self.halving;
+        if hlv == 0 || hlv >= 64 {
+            return 0;
+        }
+        let mut n = 50 * consts::COIN;
+        n >>= hlv;
+        return n;
+    }
     /// 创建一个默认配置的区块
     pub fn new_block(&self) -> Result<Block, Error> {
         let mut blk = Block::default();
@@ -64,7 +75,7 @@ impl Config {
         cb.outs.push(out);
         blk.append(cb);
         //计算默克尔树
-        blk.header.merkle = blk.compute_merkle()?;
+        blk.finish()?;
         //计算工作量
         let mut id = blk.id()?;
         let mut count = 0;

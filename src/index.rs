@@ -118,11 +118,11 @@ impl BlkIndexer {
     const BEST_KEY: &'static str = "__best__key__";
     fn new(conf: &Config) -> Result<Self, Error> {
         let dir = &conf.dir;
-        util::miss_create_dir(&dir)?;
+        util::create_miss_dir(&dir)?;
         let index = String::from(dir) + "/index";
-        util::miss_create_dir(&index)?;
+        util::create_miss_dir(&index)?;
         let block = String::from(dir) + "/block";
-        util::miss_create_dir(&block)?;
+        util::create_miss_dir(&block)?;
         Ok(BlkIndexer {
             cache: BlkCache::default(),
             leveldb: LevelDB::open(Path::new(&index))?,
