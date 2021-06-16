@@ -179,6 +179,7 @@ impl BlkIndexer {
     /// blk data 区块数据
     /// rev data 回退数据
     pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
+        let conf = self.config();
         let id = blk.id()?;
         let ref key: IKey = id.as_ref().into();
         if self.leveldb.has(key) {
@@ -194,12 +195,22 @@ impl BlkIndexer {
         match self.best() {
             Ok(top) => {
                 //其他区块检测上一个区块,现在也暂时直接写入//best配置写入
+                let prev = self.get(&top.id.as_ref().into())?;
+                if blk.header.prev != top.id {
+                    return Error::msg("block prev != best.id");
+                }
+                if blk.header.prev != prev.id()? {
+                    return Error::msg("block prev != prev.id");
+                }
                 best.height = top.height + 1;
                 //写入新的并保存旧的到回退数据
                 batch.set(&Self::BEST_KEY.into(), &best, &top);
             }
             _ => {
                 //第一个区块符合配置的上帝区块就直接写入
+                if id != conf.genesis {
+                    return Error::msg("first block not config genesis");
+                }
                 best.height = 0;
                 batch.put(&Self::BEST_KEY.into(), &best);
             }
@@ -324,38 +335,54 @@ impl Chain {
 fn test_indexer_thread() {
     use std::sync::Arc;
     use std::{thread, time};
-    let config = Arc::new(Config::test());
-    let indexer = Arc::new(Chain::new(&config).unwrap());
-    for b in 0..10 {
-        let idx = indexer.clone();
-        let conf = config.clone();
-        thread::spawn(move || {
-            let iv = b;
-            let b1 = conf.create_block(iv, "").unwrap();
-            idx.link(&b1).unwrap();
-            let id = b1.id().unwrap();
-            let b2 = idx.get(&id.as_ref().into()).unwrap();
-            assert_eq!(b1, *b2);
-        });
-    }
-    thread::sleep(time::Duration::from_secs(1));
+    Config::test(|conf, idx| {
+        let indexer = Arc::new(idx);
+        for b in 0..10 {
+            let idx = indexer.clone();
+            let conf = conf.clone();
+            thread::spawn(move || {
+                let iv = b;
+                let b1 = conf
+                    .create_block(iv, "", |blk| {
+                        let best = idx.best().unwrap();
+                        blk.header.prev = best.id;
+                    })
+                    .unwrap();
+                idx.link(&b1).unwrap();
+                let id = b1.id().unwrap();
+                let b2 = idx.get(&id.as_ref().into()).unwrap();
+                assert_eq!(b1, *b2);
+            });
+        }
+        thread::sleep(time::Duration::from_secs(1));
+    })
 }
 
 #[test]
 fn test_simple_link_pop() {
-    let config = Config::test();
-    let idx = Chain::new(&config).unwrap();
-    for i in 0u32..=10 {
-        let b1 = config.create_block(i, "").unwrap();
-        idx.link(&b1).unwrap();
-    }
-    let best = idx.best().unwrap();
-    assert_eq!(10, best.height);
-    for i in 0u32..=10 {
+    Config::test(|conf, idx| {
         let best = idx.best().unwrap();
-        assert_eq!(10 - i, best.height);
-        idx.pop().unwrap();
-    }
+        assert_eq!(0, best.height);
+        for i in 0u32..=10 {
+            let b1 = conf
+                .create_block(i + 1, "", |blk| {
+                    let best = idx.best().unwrap();
+                    blk.header.prev = best.id;
+                })
+                .unwrap();
+            idx.link(&b1).unwrap();
+        }
+        let best = idx.best().unwrap();
+        assert_eq!(11, best.height);
+        for i in 0u32..=10 {
+            let best = idx.best().unwrap();
+            assert_eq!(11 - i, best.height);
+            idx.pop().unwrap();
+        }
+        let best = idx.best().unwrap();
+        assert_eq!(0, best.height);
+        assert_eq!(best.id, conf.genesis);
+    });
 }
 
 /// 线程安全的区块LRU缓存实现

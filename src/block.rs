@@ -204,7 +204,7 @@ impl PartialEq for Header {
 impl Checker for Header {
     fn check_value(&self, _: &BlkIndexer) -> Result<(), Error> {
         //检测时间戳是否正确
-        if self.get_timestamp() < util::timestamp() {
+        if self.get_timestamp() > util::timestamp() {
             return Error::msg("block timestamp error");
         }
         //检测默克尔树id是否填充
