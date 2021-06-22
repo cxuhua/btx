@@ -221,7 +221,7 @@ impl Hasher {
     pub fn compact(&self) -> u32 {
         let b: BigUint = self.into();
         let mut s = (b.bits() + 7) / 8;
-        let mut cv: u64 = 0;
+        let mut cv: u64;
         if s <= 3 {
             let low64 = Self::low64(&b.to_u32_digits());
             cv = low64 << (8 * (3 - s));
