@@ -6,7 +6,7 @@ use crate::hasher::{Hasher, SIZE as HasherSize};
 use crate::iobuf;
 use crate::iobuf::{Reader, Writer};
 use crate::util;
-use bech32::{FromBase32, ToBase32};
+use bech32::{FromBase32, ToBase32, Variant};
 use hex::{FromHex, ToHex};
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
@@ -365,7 +365,7 @@ impl Account {
     ///带前缀编码地址
     pub fn encode_with_hasher(hrp: &str, hv: &Hasher) -> Result<String, errors::Error> {
         let bb = hv.as_bytes();
-        match bech32::encode(hrp, bb.to_base32()) {
+        match bech32::encode(hrp, bb.to_base32(), Variant::Bech32m) {
             Ok(addr) => return Ok(addr),
             Err(_) => return errors::Error::msg("InvalidAccount"),
         }
@@ -377,7 +377,10 @@ impl Account {
     }
     ///解码地址并返回前缀
     pub fn decode_with_hrp(str: &str) -> Result<(String, Hasher), errors::Error> {
-        let (hpr, dat) = bech32::decode(str).map_or_else(errors::Error::std, |v| Ok(v))?;
+        let (hpr, dat, variant) = bech32::decode(str).map_or_else(errors::Error::std, |v| Ok(v))?;
+        if variant != Variant::Bech32m {
+            return errors::Error::msg("bech32 varinat error");
+        }
         let buf = Vec::<u8>::from_base32(&dat).map_or_else(errors::Error::std, |v| Ok(v))?;
         Ok((hpr, Hasher::with_bytes(&buf)))
     }
