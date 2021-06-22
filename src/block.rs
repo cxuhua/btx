@@ -9,9 +9,6 @@ use crate::script::*;
 use crate::store::Attr;
 use crate::util;
 use std::convert::TryInto;
-/// 区块中最大交易数量
-const MAX_TX_COUNT: u16 = 0xFFFF;
-
 /// 数据检测特性
 pub trait Checker: Sized {
     /// 检测值,收到区块或者完成区块时检测区块合法性
@@ -280,6 +277,9 @@ impl PartialEq for Block {
 
 impl Checker for Block {
     fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
+        if self.txs.len() > consts::MAX_TX_COUNT as usize {
+            return Error::msg("txs count > MAX_TX_COUNT");
+        }
         let conf = ctx.config();
         //检测区块头
         self.header.check_value(ctx)?;

@@ -23,3 +23,6 @@ pub fn is_valid_amount(v: i64) -> bool {
 }
 /// 时间戳开始时间 2020-01-01 00:00:00
 pub const BASE_UTC_UNIX_TIME: i64 = 1577836800;
+
+/// 区块中最大交易数量
+pub const MAX_TX_COUNT: u16 = 0xFFFF;
