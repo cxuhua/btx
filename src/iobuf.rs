@@ -25,7 +25,7 @@ pub struct Writer {
     inner: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Reader<'a> {
     inner: &'a [u8],
 }

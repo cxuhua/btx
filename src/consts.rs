@@ -1,6 +1,9 @@
 /// 公钥前缀
 pub const PK_HRP: &str = "pk";
 
+/// 账户前缀
+pub const ACC_HRP: &str = "aps";
+
 /// 地址前缀
 pub const ADDR_HRP: &str = "btx";
 

@@ -1,6 +1,6 @@
 use crate::bytes::{FromBytes, IntoBytes};
-use crate::consts::{ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
-use crate::crypto::{PriKey, PubKey, SigValue};
+use crate::consts::{ACC_HRP, ADDR_HRP, MAX_ACCOUNT_KEY_SIZE};
+use crate::crypto::{bech32_decode, PriKey, PubKey, SigValue};
 use crate::errors;
 use crate::hasher::{Hasher, SIZE as HasherSize};
 use crate::iobuf;
@@ -124,6 +124,13 @@ fn test_account_hex_string() {
     assert_eq!(acc1, acc2);
 }
 
+#[test]
+fn test_account_bech32_string() {
+    let acc1 = Account::new(2, 2, false, true).unwrap();
+    let acc2 = Account::decode_from_bech32(&acc1.encode_to_bech32().unwrap()).unwrap();
+    assert_eq!(acc1, acc2);
+}
+
 impl Account {
     /// 编码为16进制字符串
     pub fn encode_to_hex(&self) -> Result<String, errors::Error> {
@@ -138,6 +145,23 @@ impl Account {
             let mut reader = Reader::new(&v);
             Self::decode_from_reader(&mut reader)
         })
+    }
+    /// 编码为bech32编码
+    pub fn encode_to_bech32(&self) -> Result<String, errors::Error> {
+        let mut wb = Writer::default();
+        self.encode_to_writer(&mut wb)?;
+        bech32::encode(ACC_HRP, wb.bytes().to_base32(), Variant::Bech32m)
+            .map_or(errors::Error::msg("encode bech32 error"), |v| Ok(v))
+    }
+    /// 从bech32解码数据
+    pub fn decode_from_bech32(value: &str) -> Result<Self, errors::Error> {
+        let (hrp, buf) =
+            bech32_decode(value).map_or(errors::Error::msg("decode bech32 error"), |v| Ok(v))?;
+        if hrp != ACC_HRP {
+            return errors::Error::msg("acc hrp error");
+        }
+        let mut reader = Reader::new(&buf);
+        Self::decode_from_reader(&mut reader)
     }
     /// 序列化账户信息到写入器
     pub fn encode_to_writer(&self, wb: &mut Writer) -> Result<(), errors::Error> {
@@ -166,14 +190,17 @@ impl Account {
                 }
             }
         }
+        //写入校验和
+        let sum = Hasher::sum(wb.bytes());
+        wb.put_bytes(sum.as_bytes());
         Ok(())
     }
     /// 解码账户数据
     pub fn decode_from_reader(rb: &mut Reader) -> Result<Self, errors::Error> {
+        let rbb = rb.clone();
         let num = rb.u8()?;
         let less = rb.u8()?;
         let arb = rb.u8()?;
-        //从文件加载数据
         let mut acc = Account::new(num, less, arb != 0xFF, false)?;
         for i in 0..rb.u8()? as usize {
             match rb.get::<PubKey>() {
@@ -187,6 +214,14 @@ impl Account {
                 Err(_) => acc.pris[i] = None,
             }
         }
+        //读取校验和
+        let sum: Hasher = rb.decode()?;
+        //计算原始校验数据
+        let bb = &rbb.bytes();
+        let bb = &bb[0..bb.len() - HasherSize];
+        if Hasher::sum(bb) != sum {
+            return errors::Error::msg("check sum error");
+        }
         if !acc.check_with_pubs() {
             return errors::Error::msg("check with pubs error");
         }
@@ -199,26 +234,13 @@ impl Account {
     pub fn save(&self, path: &str) -> Result<(), errors::Error> {
         let mut wb = Writer::default();
         self.encode_to_writer(&mut wb)?;
-        //写入校验和数据到末尾
-        let sum = Hasher::sum(wb.bytes());
-        wb.put_bytes(sum.as_bytes());
         util::write_file(path, || wb.bytes())
     }
     /// 从文件加载数据
     pub fn load(path: &str) -> Result<Self, errors::Error> {
         util::read_file(path, |buf| {
-            if buf.len() < HasherSize {
-                return errors::Error::msg("buf too short");
-            }
             let mut reader = Reader::new(&buf);
-            let acc = Account::decode_from_reader(&mut reader)?;
-            //读取并检测校验和
-            let sum1 = Hasher::with_bytes(&reader.get_bytes(HasherSize)?);
-            let sum2 = Hasher::sum(&buf[0..buf.len() - HasherSize]);
-            if sum1 != sum2 {
-                return errors::Error::msg("check sum error");
-            }
-            Ok(acc)
+            Account::decode_from_reader(&mut reader)
         })
     }
     ///有效公钥数量

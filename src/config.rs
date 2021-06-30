@@ -112,7 +112,7 @@ impl Config {
         let tmp = TempDir::new("btx").unwrap();
         let dir = tmp.path().to_str().unwrap();
         //测试账户包含了私钥的默认测试账户
-        let acc = Account::decode_from_hex("0202ff0221037b9a5dd166a3ee3870716c38d71db913e007fd278c83ada200caafb7c10402d72103664433bfea56f8c8c173b98a70ab0412d9b9bb5c1ed64b6a18778dd111cf1eed02208ca63f306cc974393f5f463eef94c22217c70fea913037d7ccee7728ac0598c4207fdd7ae29bd80594754cfd97d32c59e8d402ed70b372fb4a6d01d1609138d2b6");
+        let acc = Account::decode_from_bech32("aps1qgp07q3pqwm4kyqpxxnknu04xafv7ecwpha9dmwg5ae58lckq6g5a4r3cepx7ggz9y4cgwdyjpgkcvmcd0eaezykj2r5qvzcutpc8gghs6uf5qu5uk7qygxkhplmnz9ymd909v8y0rsk59wlppfjd52hfe47ult5p605zzk6nqsxf8x9n8dwwue7atwxrchana3u6h564l9wqrs3mqsc9ankppwwrve4ljrjgqtdunqzlvjm7lqhz8jgsehtu5gvj0gh9g7ku0x8paejzuqcxgs7");
         let mut conf = Config {
             ver: 1,
             dir: dir.into(),
