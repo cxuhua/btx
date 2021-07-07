@@ -501,6 +501,13 @@ impl Checker for Tx {
 }
 
 impl Tx {
+    /// 获取输出
+    pub fn get_out(&self, idx: usize) -> Result<&TxOut, Error> {
+        if idx >= self.outs.len() {
+            return Error::msg("NotFoundTxOut");
+        }
+        Ok(&self.outs[idx])
+    }
     /// 检查输入输出金额
     fn check_amount(&self) -> Result<(), Error> {
         Error::msg("not finish")
@@ -768,6 +775,19 @@ impl TxOut {
         self.script.encode_sign(wb)?;
         Ok(())
     }
+    /// 获取输出对应的地址
+    pub fn get_address(&self) -> Result<Hasher, Error> {
+        Error::msg("not imp")
+    }
+}
+
+#[test]
+fn test_txout_get_address() {
+    let mut acc = Account::new(1, 1, false, true).unwrap();
+    let hash = acc.hash().unwrap();
+    let mut out = TxOut::default();
+    out.script = Script::new_script_out(&hash).unwrap();
+    assert_eq!(out.script.get_type().unwrap(), SCRIPT_TYPE_OUT);
 }
 
 impl PartialEq for TxOut {

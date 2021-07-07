@@ -310,13 +310,7 @@ impl BlkIndexer {
                 idx: i as u16,   //在区块的位置
             };
             batch.put(&txid.into(), &iv);
-            //地址对应的金额
-            for inv in tx.ins.iter() {
-                if inv.is_coinbase() {
-                    continue;
-                }
-            }
-            for outv in tx.outs.iter() {}
+            self.write_tx_index(&mut batch, &blk, &tx)?;
         }
         //id对应的区块头属性
         let mut attr = BlkAttr::default();
@@ -335,6 +329,22 @@ impl BlkIndexer {
         //批量写入
         self.leveldb.write(&batch, true)?;
         Ok(best)
+    }
+    /// 写入交易索引
+    fn write_tx_index(&mut self, batch: &mut IBatch, blk: &Block, tx: &Tx) -> Result<(), Error> {
+        //地址对应的金额
+        for inv in tx.ins.iter() {
+            if inv.is_coinbase() {
+                continue;
+            }
+            //获取引用的输出
+            let iattr: TxAttr = self.attr(&inv.out.as_ref().into())?;
+            let iblk = self.get(&iattr.blk.as_ref().into())?;
+            let itx = iblk.get_tx(iattr.idx as usize)?;
+            let outv = itx.get_out(inv.idx as usize)?;
+        }
+        for outv in tx.outs.iter() {}
+        Ok(())
     }
     /// 回退一个区块,回退多个连续调用此方法
     /// 返回被回退的区块
