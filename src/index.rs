@@ -3,6 +3,7 @@ use crate::bytes::IntoBytes;
 use crate::config::Config;
 use crate::errors::Error;
 use crate::hasher::Hasher;
+use crate::iobuf::Writer;
 use crate::iobuf::{Reader, Serializer};
 use crate::leveldb::{IBatch, LevelDB};
 use crate::store::Store;
@@ -11,8 +12,10 @@ use bytes::BufMut;
 use core::hash;
 use db_key::Key;
 use lru::LruCache;
+use rsa::Hash;
 use std::cmp::{Eq, PartialEq};
 use std::convert::{Into, TryInto};
+use std::net::Shutdown::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -96,6 +99,89 @@ impl IKey {
     pub fn starts_with(&self, prefix: &IKey) -> bool {
         self.0.starts_with(&prefix.0)
     }
+}
+
+/// 金额数据结构
+/// 地址对应的金额将存储在key方法返回的key中
+pub struct CoinAttr {
+    cpk: Hasher, //拥有此金额的公钥
+    tx: Hasher,  //所在交易
+    idx: u16,    //所在交易
+    value: i64,  //金额
+    base: u8,    //是否在coinbase交易
+    height: u32, //所在区块高度
+}
+
+impl Default for CoinAttr {
+    fn default() -> Self {
+        CoinAttr {
+            cpk: Hasher::zero(),
+            tx: Hasher::zero(),
+            idx: 0,
+            value: 0,
+            base: 0,
+            height: 0,
+        }
+    }
+}
+
+impl CoinAttr {
+    /// 获取存储key
+    pub fn key(&self) -> IKey {
+        let mut w = Writer::default();
+        w.encode(&self.cpk);
+        w.encode(&self.tx);
+        w.u16(self.idx);
+        IKey::from_u8(w.bytes())
+    }
+    /// 从存储key获取
+    pub fn from_key(k: &IKey) -> Result<Self, Error> {
+        let mut r = Reader::new(k.bytes());
+        let mut v = Self::default();
+        v.cpk = r.decode()?;
+        v.tx = r.decode()?;
+        v.idx = r.u16()?;
+        Ok(v)
+    }
+    /// 填充值
+    pub fn fill_value(&mut self, bytes: &[u8]) -> Result<&mut Self, Error> {
+        let mut r = Reader::new(bytes);
+        self.value = r.i64()?;
+        self.base = r.u8()?;
+        self.height = r.u32()?;
+        Ok(self)
+    }
+    /// 获取值
+    pub fn value(&self) -> Writer {
+        let mut w = Writer::default();
+        w.i64(self.value);
+        w.u8(self.base);
+        w.u32(self.height);
+        w
+    }
+}
+
+#[test]
+fn test_coin_attr_key_value() {
+    use std::convert::TryFrom;
+    let mut attr = CoinAttr::default();
+    attr.cpk = Hasher::try_from("12345678ffffffffffffffffffffffffffffffffffffffffffffffff12345678")
+        .unwrap();
+    attr.tx = Hasher::try_from("87654321ffffffffffffffffffffffffffffffffffffffffffffffff87654321")
+        .unwrap();
+    attr.idx = 0x9988;
+    attr.value = 78965;
+    attr.base = 1;
+    attr.height = 2678;
+    let value = attr.value();
+    let mut attr2 = CoinAttr::from_key(&attr.key()).unwrap();
+    let attr2 = attr2.fill_value(value.bytes()).unwrap();
+    assert_eq!(attr.cpk, attr2.cpk);
+    assert_eq!(attr.tx, attr2.tx);
+    assert_eq!(attr.idx, attr2.idx);
+    assert_eq!(attr.value, attr2.value);
+    assert_eq!(attr.base, attr2.base);
+    assert_eq!(attr.height, attr2.height);
 }
 
 /// 区块链数据存储索引
@@ -187,6 +273,7 @@ impl BlkIndexer {
         }
         //开始写入
         let mut batch = IBatch::new(true);
+        //最新best数据
         let mut best = Best {
             id: id.clone(),
             height: u32::MAX,
@@ -194,11 +281,9 @@ impl BlkIndexer {
         //获取顶部区块
         match self.best() {
             Ok(top) => {
-                //其他区块检测上一个区块,现在也暂时直接写入//best配置写入
-                let prev = self.get(&top.id.as_ref().into())?;
-                if blk.header.prev != top.id {
-                    return Error::msg("block prev != best.id");
-                }
+                //获取上个区块信息
+                let prev = self.get(&top.id_key())?;
+                //看当前prev是否指向上个区块
                 if blk.header.prev != prev.id()? {
                     return Error::msg("block prev != prev.id");
                 }
@@ -216,15 +301,22 @@ impl BlkIndexer {
             }
         }
         //高度对应的区块id
-        batch.put(&best.height.into(), &best.id);
-        //交易对应的区块信息和位置
+        batch.put(&best.height_key(), &best.id);
+        //每个交易对应的区块信息和位置
         for (i, tx) in blk.txs.iter().enumerate() {
             let txid = &tx.id()?;
             let iv = TxAttr {
-                blk: txid.clone(),
-                idx: i as u16,
+                blk: id.clone(), //此交易指向的区块
+                idx: i as u16,   //在区块的位置
             };
             batch.put(&txid.into(), &iv);
+            //地址对应的金额
+            for inv in tx.ins.iter() {
+                if inv.is_coinbase() {
+                    continue;
+                }
+            }
+            for outv in tx.outs.iter() {}
         }
         //id对应的区块头属性
         let mut attr = BlkAttr::default();
@@ -239,7 +331,7 @@ impl BlkIndexer {
         attr.blk = self.blk.push(blkwb.bytes())?;
         attr.rev = self.rev.push(revwb.bytes())?;
         //写入区块id对应的区块头属性,这个不会包含在回退数据中,回退时删除数据
-        batch.put(&id.as_ref().into(), &attr);
+        batch.put(key, &attr);
         //批量写入
         self.leveldb.write(&batch, true)?;
         Ok(best)

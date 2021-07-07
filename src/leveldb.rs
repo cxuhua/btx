@@ -26,6 +26,9 @@ impl Default for IBatch {
     }
 }
 
+/// 最大key和value长度
+const MAX_KEY_VALUE: usize = 0xFFFF;
+
 impl IBatch {
     /// 创建批处理对象
     /// rev=true会创建回退日志
@@ -45,13 +48,13 @@ impl IBatch {
     /// 删除数据并写入回退数据(如果需要)
     /// 如果v存在将v写入回退批次
     pub fn del_bytes(&mut self, k: &IKey, v: Option<&[u8]>) {
-        assert!(k.len() < 0xFFFF);
+        assert!(k.len() < MAX_KEY_VALUE);
         self.b.delete(k.clone());
         if v.is_none() || self.f.is_none() {
             return;
         }
         let fv = &mut self.f.as_mut().unwrap();
-        assert!(v.unwrap().len() < 0xFFFF);
+        assert!(v.unwrap().len() < MAX_KEY_VALUE);
         fv.put(k.clone(), v.unwrap())
     }
     /// 删除数据并按对象序列写入(如果对象存在)
@@ -59,19 +62,19 @@ impl IBatch {
     where
         V: Serializer,
     {
-        assert!(k.len() < 0xFFFF);
+        assert!(k.len() < MAX_KEY_VALUE);
         self.b.delete(k.clone());
         if v.is_none() || self.f.is_none() {
             return;
         }
         let wb = v.unwrap().pack();
-        assert!(wb.len() < 0xFFFF);
+        assert!(wb.len() < MAX_KEY_VALUE);
         let fv = &mut self.f.as_mut().unwrap();
         fv.put(k.clone(), wb.bytes());
     }
     /// 添加kv数据
     fn put_bytes(&mut self, k: &IKey, v: &[u8]) {
-        assert!(k.len() < 0xFFFF && v.len() < 0xFFFF);
+        assert!(k.len() < MAX_KEY_VALUE && v.len() < MAX_KEY_VALUE);
         self.b.put(k.clone(), v);
         if let Some(ref mut fv) = self.f {
             fv.delete(k.clone())
@@ -83,7 +86,7 @@ impl IBatch {
         V: Serializer,
     {
         let wb = v.pack();
-        assert!(k.len() < 0xFFFF && wb.len() < 0xFFFF);
+        assert!(k.len() < MAX_KEY_VALUE && wb.len() < MAX_KEY_VALUE);
         self.b.put(k.clone(), wb.bytes());
         if let Some(ref mut fv) = self.f {
             fv.delete(k.clone())
@@ -95,11 +98,11 @@ impl IBatch {
         V: Serializer,
     {
         let wb = new.pack();
-        assert!(k.len() < 0xFFFF && wb.len() < 0xFFFF);
+        assert!(k.len() < MAX_KEY_VALUE && wb.len() < MAX_KEY_VALUE);
         self.b.put(k.clone(), wb.bytes());
         if let Some(ref mut fv) = self.f {
             let wb = old.pack();
-            assert!(wb.len() < 0xFFFF);
+            assert!(wb.len() < MAX_KEY_VALUE);
             fv.put(k.clone(), wb.bytes());
         }
     }

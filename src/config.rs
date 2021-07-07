@@ -132,6 +132,7 @@ impl Config {
         conf.genesis = blk.id().unwrap();
         //打开数据库
         let idx = Chain::new(&conf).unwrap();
+        //链接第一个区块
         idx.link(&blk).unwrap();
         tf(&conf, idx);
     }
