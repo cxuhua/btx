@@ -43,7 +43,8 @@ impl MerkleTree {
         if height == 0 {
             return Ok(ids[pos].clone());
         }
-        let (left, mut right) = (self.calc_hasher(height - 1, pos * 2, ids)?, Hasher::zero());
+        let right: Hasher;
+        let left = self.calc_hasher(height - 1, pos * 2, ids)?;
         if pos * 2 + 1 < self.tree_width(height - 1) {
             right = self.calc_hasher(height - 1, pos * 2 + 1, ids)?;
         } else {
@@ -124,10 +125,8 @@ impl MerkleTree {
             }
             return hash.clone();
         }
-        let (left, mut right) = (
-            self.extract(height - 1, pos * 2, nbits, nhash, ids, idx),
-            Hasher::zero(),
-        );
+        let left = self.extract(height - 1, pos * 2, nbits, nhash, ids, idx);
+        let right: Hasher;
         if pos * 2 + 1 < self.tree_width(height - 1) {
             right = self.extract(height - 1, pos * 2 + 1, nbits, nhash, ids, idx);
             if left == right {

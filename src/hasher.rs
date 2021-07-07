@@ -58,6 +58,11 @@ fn test_compute_bits() {
         .try_into()
         .unwrap();
     assert!(vb.verify_pow(&limit, 0x1d00ffff));
+
+    let vb: Hasher = "00000000000404CB000000000000000000000000000000000000000000000000"
+        .try_into()
+        .unwrap();
+    assert_eq!(0x1B0404CB, vb.compact());
 }
 
 ///double sha256 hasher
@@ -221,7 +226,7 @@ impl Hasher {
     pub fn compact(&self) -> u32 {
         let b: BigUint = self.into();
         let mut s = (b.bits() + 7) / 8;
-        let mut cv: u64 = 0;
+        let mut cv: u64;
         if s <= 3 {
             let low64 = Self::low64(&b.to_u32_digits());
             cv = low64 << (8 * (3 - s));
@@ -376,6 +381,12 @@ fn test_sha256() {
     assert_ne!(x, y);
     let z = Hasher::hash("21134".as_bytes());
     assert_eq!(x, z);
+
+    let z = Hasher::hash("hello".as_bytes());
+    assert_eq!(
+        z.encode_hex(),
+        "503d8319a48348cdc610a582f7bf754b5833df65038606eb48510790dfc99595"
+    );
 }
 
 #[test]

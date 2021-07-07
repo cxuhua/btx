@@ -121,7 +121,7 @@ impl fmt::LowerHex for PubKey {
     }
 }
 
-use bech32::{FromBase32, ToBase32};
+use bech32::{FromBase32, ToBase32, Variant};
 
 impl PubKey {
     ///验证签名数据
@@ -133,13 +133,16 @@ impl PubKey {
     pub fn encode(&self) -> Result<String, bech32::Error> {
         let v = self.hash();
         let b = v.as_bytes();
-        bech32::encode(PK_HRP, b.to_base32())
+        bech32::encode(PK_HRP, b.to_base32(), Variant::Bech32m)
     }
 }
 
 ///解码bech32格式的字符串
 pub fn bech32_decode(s: &str) -> Result<(String, Vec<u8>), bech32::Error> {
-    let (hrp, data) = bech32::decode(&s)?;
+    let (hrp, data, variant) = bech32::decode(&s)?;
+    if variant != Variant::Bech32m {
+        return Err(bech32::Error::InvalidPadding);
+    }
     let vdata = Vec::<u8>::from_base32(&data)?;
     Ok((String::from(hrp), vdata))
 }
