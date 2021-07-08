@@ -1,4 +1,5 @@
-use crate::account::Account;
+use crate::account::{Account, HasAddress};
+use crate::bytes::FromBytes;
 use crate::consts;
 use crate::errors::Error;
 use crate::hasher::Hasher;
@@ -663,6 +664,44 @@ impl Checker for TxIn {
     }
 }
 
+impl HasAddress for TxIn {
+    /// 获取输入对应的地址
+    fn get_address(&self) -> Result<Hasher, Error> {
+        self.script.check()?;
+        let typ = self.script.get_type()?;
+        //暂时只支持 SCRIPT_TYPE_IN 类型
+        if typ == SCRIPT_TYPE_IN {
+            let mut r = self.script.reader();
+            //0 OP_TYPE
+            if r.u8()? != OP_TYPE {
+                return Error::msg("OP_TYPE error");
+            }
+            //1 SCRIPT_TYPE_IN
+            if r.u8()? != SCRIPT_TYPE_IN {
+                return Error::msg("SCRIPT_TYPE_OUT error");
+            }
+            //3 OP_DATA_1 - OP_DATA_4
+            let op = r.u8()?;
+            let d = Exector::read_binary(&mut r, op)?;
+            let acc = Account::from_bytes(&d)?;
+            return acc.get_address();
+        }
+        Error::msg("script type error,not SCRIPT_TYPE_IN")
+    }
+}
+
+#[test]
+fn test_txin_get_address() {
+    use crate::account::HasAddress;
+    let acc = Account::new(1, 1, false, true).unwrap();
+    let mut inv = TxIn::default();
+    inv.script = Script::new_script_in(&acc).unwrap();
+    let address1 = inv.get_address().unwrap();
+    let address2 = acc.get_address().unwrap();
+    assert_eq!(address1, address2);
+    assert_eq!(inv.string().unwrap(), acc.string().unwrap());
+}
+
 impl TxIn {
     /// 获取引用的交易输出
     pub fn get_tx_out(&self, ctx: &Chain) -> Result<TxOut, Error> {
@@ -769,25 +808,61 @@ impl Checker for TxOut {
     }
 }
 
+impl HasAddress for TxOut {
+    /// 获取输出对应的地址
+    fn get_address(&self) -> Result<Hasher, Error> {
+        self.script.check()?;
+        let typ = self.script.get_type()?;
+        //暂时只支持 SCRIPT_TYPE_OUT 类型
+        if typ == SCRIPT_TYPE_OUT {
+            let mut r = self.script.reader();
+            //0 OP_TYPE
+            if r.u8()? != OP_TYPE {
+                return Error::msg("OP_TYPE error");
+            }
+            //1 SCRIPT_TYPE_OUT
+            if r.u8()? != SCRIPT_TYPE_OUT {
+                return Error::msg("SCRIPT_TYPE_OUT error");
+            }
+            //2 OP_VERIFY_INOUT
+            if r.u8()? != OP_VERIFY_INOUT {
+                return Error::msg("OP_VERIFY_INOUT error");
+            }
+            //3 OP_HASHER
+            if r.u8()? != OP_HASHER {
+                return Error::msg("OP_HASHER error");
+            }
+            //4 OP_DATA_1
+            if r.u8()? != OP_DATA_1 {
+                return Error::msg("OP_DATA_1 error");
+            }
+            //5 address Hasher
+            let l = r.u8()? as usize;
+            let d = r.get_bytes(l)?;
+            return Ok(Hasher::with_bytes(&d));
+        }
+        Error::msg("script type error,not SCRIPT_TYPE_OUT")
+    }
+}
+
 impl TxOut {
     fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.i64(self.value);
         self.script.encode_sign(wb)?;
         Ok(())
     }
-    /// 获取输出对应的地址
-    pub fn get_address(&self) -> Result<Hasher, Error> {
-        Error::msg("not imp")
-    }
 }
 
 #[test]
 fn test_txout_get_address() {
-    let mut acc = Account::new(1, 1, false, true).unwrap();
+    let acc = Account::new(1, 1, false, true).unwrap();
     let hash = acc.hash().unwrap();
     let mut out = TxOut::default();
     out.script = Script::new_script_out(&hash).unwrap();
     assert_eq!(out.script.get_type().unwrap(), SCRIPT_TYPE_OUT);
+    let address1 = out.get_address().unwrap();
+    let address2 = acc.get_address().unwrap();
+    assert_eq!(address1, address2);
 }
 
 impl PartialEq for TxOut {

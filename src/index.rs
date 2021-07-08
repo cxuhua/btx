@@ -1,4 +1,4 @@
-use crate::block::{Best, BlkAttr, Block, Checker, Tx, TxAttr};
+use crate::block::{Best, BlkAttr, Block, Checker, Tx, TxAttr, TxIn, TxOut};
 use crate::bytes::IntoBytes;
 use crate::config::Config;
 use crate::errors::Error;
@@ -12,10 +12,8 @@ use bytes::BufMut;
 use core::hash;
 use db_key::Key;
 use lru::LruCache;
-use rsa::Hash;
 use std::cmp::{Eq, PartialEq};
 use std::convert::{Into, TryInto};
-use std::net::Shutdown::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -305,6 +303,10 @@ impl BlkIndexer {
         //每个交易对应的区块信息和位置
         for (i, tx) in blk.txs.iter().enumerate() {
             let txid = &tx.id()?;
+            //如果此交易已经存在
+            if self.leveldb.has(&txid.into()) {
+                return Error::msg("txid exists block index");
+            }
             let iv = TxAttr {
                 blk: id.clone(), //此交易指向的区块
                 idx: i as u16,   //在区块的位置
@@ -330,20 +332,43 @@ impl BlkIndexer {
         self.leveldb.write(&batch, true)?;
         Ok(best)
     }
+    /// 获取交易信息
+    fn get_tx(&mut self, id: &Hasher) -> Result<Tx, Error> {
+        //获取交易对应的存储属性
+        let attr: TxAttr = self.attr(&id.as_ref().into())?;
+        //获取对应的区块信息
+        let blk = self.get(&attr.blk.as_ref().into())?;
+        //获取对应的交易信息
+        let tx = blk.get_tx(attr.idx as usize)?;
+        Ok(tx.clone())
+    }
+    /// 获取输入引用的输出
+    fn get_txin_ref_txout(&mut self, inv: &TxIn) -> Result<TxOut, Error> {
+        //获取交易对应的存储属性
+        let attr: TxAttr = self.attr(&inv.out.as_ref().into())?;
+        //获取对应的区块信息
+        let blk = self.get(&attr.blk.as_ref().into())?;
+        //获取对应的交易信息
+        let tx = blk.get_tx(attr.idx as usize)?;
+        //获取对应的输出
+        let outv = tx.get_out(inv.idx as usize)?;
+        Ok(outv.clone())
+    }
     /// 写入交易索引
     fn write_tx_index(&mut self, batch: &mut IBatch, blk: &Block, tx: &Tx) -> Result<(), Error> {
-        //地址对应的金额
+        //输入对应消耗金额
         for inv in tx.ins.iter() {
+            //coinbase输入不存在金额消耗
             if inv.is_coinbase() {
                 continue;
             }
-            //获取引用的输出
-            let iattr: TxAttr = self.attr(&inv.out.as_ref().into())?;
-            let iblk = self.get(&iattr.blk.as_ref().into())?;
-            let itx = iblk.get_tx(iattr.idx as usize)?;
-            let outv = itx.get_out(inv.idx as usize)?;
+            //获取对应的输出
+            let outv = self.get_txin_ref_txout(&inv)?;
         }
-        for outv in tx.outs.iter() {}
+        //输出对应获取的金额
+        for outv in tx.outs.iter() {
+            //
+        }
         Ok(())
     }
     /// 回退一个区块,回退多个连续调用此方法

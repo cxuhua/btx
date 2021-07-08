@@ -5,11 +5,10 @@ use core::fmt;
 use hex::{FromHex, ToHex};
 use sha2::{Digest, Sha256};
 pub const SIZE: usize = 32;
-
 use num_bigint::BigUint;
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
+use std::convert::{From, TryFrom, TryInto};
 use std::ops::{Div, Mul};
 
 #[test]

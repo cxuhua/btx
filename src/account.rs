@@ -8,6 +8,18 @@ use crate::iobuf::{Reader, Writer};
 use crate::util;
 use bech32::{FromBase32, ToBase32, Variant};
 use hex::{FromHex, ToHex};
+
+/// 存在地址hasher可获取地址
+pub trait HasAddress: Sized {
+    /// 获取地址hasher
+    fn get_address(&self) -> Result<Hasher, errors::Error>;
+    /// 获取地址hash并转为字符串
+    fn string(&self) -> Result<String, errors::Error> {
+        let h = self.get_address()?;
+        Account::encode_with_hasher(ADDR_HRP, &h)
+    }
+}
+
 /// 账户结构 多个私钥组成
 /// 按顺序链接后hasher生成地址
 #[derive(Debug, Clone)]
@@ -129,6 +141,13 @@ fn test_account_bech32_string() {
     let acc1 = Account::new(2, 2, false, true).unwrap();
     let acc2 = Account::decode_from_bech32(&acc1.encode_to_bech32().unwrap()).unwrap();
     assert_eq!(acc1, acc2);
+}
+
+impl HasAddress for Account {
+    /// 从账号获取地址
+    fn get_address(&self) -> Result<Hasher, errors::Error> {
+        self.hash()
+    }
 }
 
 impl Account {

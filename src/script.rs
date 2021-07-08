@@ -136,7 +136,25 @@ impl Exector {
             Ok(rl)
         }
     }
-    ///执行脚本
+    /// 读取二进制数据
+    pub fn read_binary(r: &mut Reader, op: u8) -> Result<Vec<u8>, Error> {
+        match op {
+            OP_DATA_1 => {
+                let l = r.u8()? as usize;
+                r.get_bytes(l)
+            }
+            OP_DATA_2 => {
+                let l = r.u16()? as usize;
+                r.get_bytes(l)
+            }
+            OP_DATA_4 => {
+                let l = r.u32()? as usize;
+                r.get_bytes(l)
+            }
+            _ => Error::msg("op error"),
+        }
+    }
+    /// 执行脚本
     pub fn exec(&mut self, script: &Script, env: &impl ExectorEnv) -> Result<usize, Error> {
         //脚本过大
         if script.len() > MAX_SCRIPT_SIZE {
@@ -180,24 +198,10 @@ impl Exector {
                     }
                     _ => return Error::msg("ScriptFmtErr"),
                 },
-                OP_DATA_1..=OP_DATA_4 => match op {
-                    OP_DATA_1 => {
-                        let l = reader.u8()? as usize;
-                        let d = reader.get_bytes(l)?;
-                        self.eles.push(Ele::from(d));
-                    }
-                    OP_DATA_2 => {
-                        let l = reader.u16()? as usize;
-                        let d = reader.get_bytes(l)?;
-                        self.eles.push(Ele::from(d));
-                    }
-                    OP_DATA_4 => {
-                        let l = reader.u32()? as usize;
-                        let d = reader.get_bytes(l)?;
-                        self.eles.push(Ele::from(d));
-                    }
-                    _ => return Error::msg("ScriptFmtErr"),
-                },
+                OP_DATA_1..=OP_DATA_4 => {
+                    let d = Self::read_binary(&mut reader, op)?;
+                    self.eles.push(Ele::from(d));
+                }
                 OP_VERIFY => {
                     //验证顶部元素是否为true,不是返回错误,否则删除栈顶继续
                     self.check(1)?;
