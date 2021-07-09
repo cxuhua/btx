@@ -1,6 +1,8 @@
+use crate::account::{Account, HasAddress};
 use crate::block::{Best, BlkAttr, Block, Checker, Tx, TxAttr, TxIn, TxOut};
 use crate::bytes::IntoBytes;
 use crate::config::Config;
+use crate::consts;
 use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::iobuf::Writer;
@@ -101,13 +103,35 @@ impl IKey {
 
 /// 金额数据结构
 /// 地址对应的金额将存储在key方法返回的key中
+/// cpk tx idx 使用存储key去填充
+#[derive(Clone, Debug)]
 pub struct CoinAttr {
-    cpk: Hasher, //拥有此金额的公钥
+    cpk: Hasher, //拥有此金额的公钥hasher
     tx: Hasher,  //所在交易
-    idx: u16,    //所在交易
+    idx: u16,    //所在交易的输出
     value: i64,  //金额
     base: u8,    //是否在coinbase交易
     height: u32, //所在区块高度
+}
+
+impl Serializer for CoinAttr {
+    /// 编码数据到writer
+    fn encode(&self, w: &mut Writer) {
+        w.i64(self.value);
+        w.u8(self.base);
+        w.u32(self.height);
+    }
+    /// 从reader读取数据
+    fn decode(r: &mut Reader) -> Result<Self, Error>
+    where
+        Self: Default,
+    {
+        let mut coin = Self::default();
+        coin.value = r.i64()?;
+        coin.base = r.u8()?;
+        coin.height = r.u32()?;
+        Ok(coin)
+    }
 }
 
 impl Default for CoinAttr {
@@ -124,6 +148,15 @@ impl Default for CoinAttr {
 }
 
 impl CoinAttr {
+    /// 金额在spent高度上是否可用
+    pub fn is_matured(&self, spent: u32) -> bool {
+        //非coinbase可用
+        if self.base == 0 {
+            return true;
+        }
+        //coinbase输出必须在100个高度后才可消费
+        return spent - self.height >= consts::COINBASE_MATURITY;
+    }
     /// 获取存储key
     pub fn key(&self) -> IKey {
         let mut w = Writer::default();
@@ -141,20 +174,29 @@ impl CoinAttr {
         v.idx = r.u16()?;
         Ok(v)
     }
+    /// 从存储key获取
+    pub fn fill_key(&mut self, k: &IKey) -> Result<&Self, Error> {
+        let mut r = Reader::new(k.bytes());
+        self.cpk = r.decode()?;
+        self.tx = r.decode()?;
+        self.idx = r.u16()?;
+        Ok(self)
+    }
     /// 填充值
-    pub fn fill_value(&mut self, bytes: &[u8]) -> Result<&mut Self, Error> {
-        let mut r = Reader::new(bytes);
+    pub fn fill_value_with_reader(&mut self, r: &mut Reader) -> Result<&mut Self, Error> {
         self.value = r.i64()?;
         self.base = r.u8()?;
         self.height = r.u32()?;
         Ok(self)
     }
+    /// 填充值
+    pub fn fill_value(&mut self, bytes: &[u8]) -> Result<&mut Self, Error> {
+        self.fill_value_with_reader(&mut Reader::new(bytes))
+    }
     /// 获取值
     pub fn value(&self) -> Writer {
         let mut w = Writer::default();
-        w.i64(self.value);
-        w.u8(self.base);
-        w.u32(self.height);
+        self.encode(&mut w);
         w
     }
 }
@@ -180,6 +222,21 @@ fn test_coin_attr_key_value() {
     assert_eq!(attr.value, attr2.value);
     assert_eq!(attr.base, attr2.base);
     assert_eq!(attr.height, attr2.height);
+}
+
+#[test]
+fn test_block_index_coin_save() {
+    Config::test(|conf, idx| {
+        let acc = conf.acc.as_ref().unwrap();
+        let best = idx.best().unwrap();
+        assert_eq!(best.id, conf.genesis);
+        let coins = idx.list_coins(&acc).unwrap();
+        assert_eq!(1, coins.len());
+        assert_eq!(coins[0].cpk, acc.hash().unwrap());
+        assert_eq!(coins[0].value, consts::coin(50));
+        assert_eq!(coins[0].base, 1);
+        assert_eq!(coins[0].height, 0);
+    });
 }
 
 /// 区块链数据存储索引
@@ -225,6 +282,27 @@ impl BlkIndexer {
         let key: IKey = Self::BEST_KEY.into();
         self.leveldb.get(&key)
     }
+    /// 获取账户对应的金额列表
+    pub fn list_coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
+        let mut coins: Vec<CoinAttr> = vec![];
+        let hash = acc.get_address()?;
+        let akey: IKey = hash.as_ref().into();
+        let iter = &mut self.leveldb.iter(&akey);
+        while iter.next() {
+            let key = &iter.key();
+            if !key.starts_with(&akey) {
+                break;
+            }
+            let value: Option<CoinAttr> = iter.value();
+            if value.is_none() {
+                return Error::msg("coin value none");
+            }
+            let mut value = value.unwrap();
+            value.fill_key(key)?;
+            coins.push(value);
+        }
+        Ok(coins)
+    }
     /// 获取属性信息
     pub fn attr<T>(&self, k: &IKey) -> Result<T, Error>
     where
@@ -245,12 +323,13 @@ impl BlkIndexer {
             return Ok(v);
         }
         //从数据库查询并加入缓存
-        let attr: BlkAttr = self.leveldb.get(k)?;
+        let attr: BlkAttr = self.attr(k)?;
         //读取区块数据
         let buf = self.blk.pull(&attr.blk)?;
         //解析成区块
         let mut reader = Reader::new(&buf);
-        let blk: Block = reader.decode()?;
+        let mut blk: Block = reader.decode()?;
+        blk.attr = attr;
         //加入缓存并返回
         self.cache.put(k, &blk)
     }
@@ -312,7 +391,7 @@ impl BlkIndexer {
                 idx: i as u16,   //在区块的位置
             };
             batch.put(&txid.into(), &iv);
-            self.write_tx_index(&mut batch, &blk, &tx)?;
+            self.write_tx_index(&mut batch, &best, &tx)?;
         }
         //id对应的区块头属性
         let mut attr = BlkAttr::default();
@@ -354,20 +433,64 @@ impl BlkIndexer {
         let outv = tx.get_out(inv.idx as usize)?;
         Ok(outv.clone())
     }
+    /// 获取输入引用的金额
+    pub fn get_txin_ref_coin(&mut self, inv: &TxIn) -> Result<CoinAttr, Error> {
+        //获取交易对应的存储属性
+        let attr: TxAttr = self.attr(&inv.out.as_ref().into())?;
+        //获取区块信息
+        let blk = self.get(&attr.blk.as_ref().into())?;
+        //获取对应的交易信息
+        let tx = blk.get_tx(attr.idx as usize)?;
+        //获取对应的输出
+        let outv = tx.get_out(inv.idx as usize)?;
+        //创建coin信息返回
+        let mut coin = CoinAttr::default();
+        coin.cpk = outv.get_address()?;
+        coin.tx = tx.id()?;
+        coin.idx = inv.idx;
+        coin.value = outv.value;
+        if tx.is_coinbase() {
+            coin.base = 1;
+        }
+        coin.height = blk.attr.hhv;
+        Ok(coin)
+    }
     /// 写入交易索引
-    fn write_tx_index(&mut self, batch: &mut IBatch, blk: &Block, tx: &Tx) -> Result<(), Error> {
+    fn write_tx_index(
+        &mut self,
+        batch: &mut IBatch, //批事务写入
+        best: &Best,        //当前生成区块的高度
+        tx: &Tx,            //当前区块交易
+    ) -> Result<(), Error> {
+        let mut base: u8 = 0;
+        if tx.is_coinbase() {
+            base = 1;
+        }
         //输入对应消耗金额
         for inv in tx.ins.iter() {
             //coinbase输入不存在金额消耗
             if inv.is_coinbase() {
                 continue;
             }
-            //获取对应的输出
-            let outv = self.get_txin_ref_txout(&inv)?;
+            //获取引用的金额
+            let coin = self.get_txin_ref_coin(&inv)?;
+            //在当前高度上是否成熟
+            if !coin.is_matured(best.height) {
+                return Error::msg("ref coin not matured");
+            }
+            //删除coin并且存入回退数据
+            batch.del(&coin.key(), Some(&coin));
         }
         //输出对应获取的金额
-        for outv in tx.outs.iter() {
-            //
+        for (i, outv) in tx.outs.iter().enumerate() {
+            let mut coin = CoinAttr::default();
+            coin.cpk = outv.get_address()?;
+            coin.tx = tx.id()?;
+            coin.idx = i as u16;
+            coin.value = outv.value;
+            coin.base = base;
+            coin.height = best.height;
+            batch.put(&coin.key(), &coin);
         }
         Ok(())
     }
@@ -430,6 +553,10 @@ impl Chain {
         T: Serializer + Default,
     {
         self.do_read(|v| v.attr(k))
+    }
+    /// 获取账户对应的金额列表
+    pub fn list_coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
+        self.do_read(|v| v.list_coins(acc))
     }
     /// 获取交易信息
     pub fn get_tx(&self, k: &IKey) -> Result<Tx, Error> {

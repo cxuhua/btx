@@ -22,3 +22,5 @@ pub fn is_valid_amount(v: i64) -> bool {
 pub const BASE_UTC_UNIX_TIME: i64 = 1577836800;
 /// 区块中最大交易数量
 pub const MAX_TX_COUNT: u16 = 0xFFFF;
+/// coinbase交易在100个确认后可用
+pub const COINBASE_MATURITY: u32 = 100;

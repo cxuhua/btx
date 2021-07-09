@@ -267,7 +267,10 @@ pub struct Block {
     pub header: Header,
     ///交易列表
     pub txs: Vec<Tx>,
+    //是否完成
     finish: bool,
+    //加载时保存区块信息
+    pub attr: BlkAttr,
 }
 
 impl PartialEq for Block {
@@ -304,6 +307,7 @@ impl Default for Block {
             header: Header::default(),
             txs: vec![],
             finish: false,
+            attr: BlkAttr::default(),
         }
     }
 }
@@ -314,6 +318,7 @@ impl Clone for Block {
             header: self.header.clone(),
             txs: self.txs.clone(),
             finish: self.finish,
+            attr: BlkAttr::default(),
         }
     }
 }
