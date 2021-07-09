@@ -230,7 +230,7 @@ fn test_block_index_coin_save() {
         let acc = conf.acc.as_ref().unwrap();
         let best = idx.best().unwrap();
         assert_eq!(best.id, conf.genesis);
-        let coins = idx.list_coins(&acc).unwrap();
+        let coins = idx.coins(&acc).unwrap();
         assert_eq!(1, coins.len());
         assert_eq!(coins[0].cpk, acc.hash().unwrap());
         assert_eq!(coins[0].value, consts::coin(50));
@@ -283,7 +283,7 @@ impl BlkIndexer {
         self.leveldb.get(&key)
     }
     /// 获取账户对应的金额列表
-    pub fn list_coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
+    pub fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
         let mut coins: Vec<CoinAttr> = vec![];
         let hash = acc.get_address()?;
         let akey: IKey = hash.as_ref().into();
@@ -555,8 +555,8 @@ impl Chain {
         self.do_read(|v| v.attr(k))
     }
     /// 获取账户对应的金额列表
-    pub fn list_coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
-        self.do_read(|v| v.list_coins(acc))
+    pub fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
+        self.do_read(|v| v.coins(acc))
     }
     /// 获取交易信息
     pub fn get_tx(&self, k: &IKey) -> Result<Tx, Error> {

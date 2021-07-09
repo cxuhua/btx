@@ -361,7 +361,7 @@ impl Account {
     /// 不带签名和私钥的数据
     pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), errors::Error> {
         if !self.check() {
-            return errors::Error::msg("InvalidPublicKey");
+            return errors::Error::msg("InvalidAccount");
         }
         if self.pubs_size() != self.num {
             return errors::Error::msg("InvalidPublicKey");
@@ -382,7 +382,7 @@ impl Account {
     //hash账户用于生成地址
     pub fn hash(&self) -> Result<Hasher, errors::Error> {
         if !self.check() {
-            return errors::Error::msg("InvalidPublicKey");
+            return errors::Error::msg("InvalidAccount");
         }
         if self.pubs_size() != self.num {
             return errors::Error::msg("InvalidPublicKey");
