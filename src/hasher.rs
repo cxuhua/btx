@@ -282,9 +282,6 @@ impl Hasher {
     pub fn as_bytes(&self) -> &[u8] {
         &self.inner
     }
-    pub fn must_from(hex: &str) -> Self {
-        Hasher::try_from(hex).unwrap()
-    }
 }
 
 impl FromBytes for Hasher {

@@ -6,6 +6,7 @@ use crate::hasher::Hasher;
 use crate::index::Chain;
 use crate::script::Script;
 use crate::util;
+use std::convert::TryInto;
 use tempdir::TempDir;
 
 #[derive(Clone)]
@@ -40,13 +41,13 @@ impl Config {
         return n;
     }
     /// 创建一个默认配置的区块
-    pub fn new_block(&self) -> Result<Block, Error> {
+    pub fn new_block(&self, p: Hasher) -> Result<Block, Error> {
         let mut blk = Block::default();
-        //设置区块头
         blk.header.bits = self.pow_limit.compact();
         blk.header.nonce = util::rand_u32();
         blk.header.set_now_time();
         blk.header.set_ver(self.ver);
+        blk.header.prev = p;
         Ok(blk)
     }
     /// 创建coinbase交易
@@ -74,7 +75,7 @@ impl Config {
     /// h 区块高度
     /// s coinbase信息
     /// v 奖励金额
-    pub fn create_block<F>(&self, h: u32, s: &str, ff: F) -> Result<Block, Error>
+    pub fn create_block<F>(&self, p: Hasher, h: u32, s: &str, ff: F) -> Result<Block, Error>
     where
         F: FnOnce(&mut Block),
     {
@@ -82,7 +83,7 @@ impl Config {
             return Error::msg("acc option miss");
         }
         let acc = self.acc.as_ref().unwrap();
-        let mut blk = self.new_block()?;
+        let mut blk = self.new_block(p)?;
         //创建coinbase交易
         let cb = self.new_coinbase(h, s, &acc)?;
         blk.append(cb);
@@ -116,19 +117,19 @@ impl Config {
         let mut conf = Config {
             ver: 1,
             dir: dir.into(),
-            pow_limit: Hasher::must_from(
-                "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-            ),
-            genesis: Hasher::must_from(
-                "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-            ),
+            pow_limit: "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .try_into()
+                .unwrap(),
+            genesis: Hasher::zero(),
             pow_time: 14 * 24 * 60 * 60,
             pow_span: 2016,
             halving: 210000,
             acc: Some(acc.unwrap()),
         };
         //创建第一个区块
-        let blk = conf.create_block(0, "genesis test block", |_| {}).unwrap();
+        let blk = conf
+            .create_block(Hasher::zero(), 0, "genesis test block", |_| {})
+            .unwrap();
         conf.genesis = blk.id().unwrap();
         //打开数据库
         let idx = Chain::new(&conf).unwrap();
@@ -141,12 +142,12 @@ impl Config {
         Config {
             ver: 1,
             dir: "/blkdir".into(),
-            pow_limit: Hasher::must_from(
-                "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-            ),
-            genesis: Hasher::must_from(
-                "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-            ),
+            pow_limit: "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .try_into()
+                .unwrap(),
+            genesis: "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .try_into()
+                .unwrap(),
             pow_time: 14 * 24 * 60 * 60,
             pow_span: 2016,
             halving: 210000,

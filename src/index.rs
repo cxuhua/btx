@@ -597,7 +597,7 @@ fn test_indexer_thread() {
             thread::spawn(move || {
                 let iv = b;
                 let b1 = conf
-                    .create_block(iv, "", |blk| {
+                    .create_block(Hasher::zero(), iv, "", |blk| {
                         let best = idx.best().unwrap();
                         blk.header.prev = best.id;
                     })
@@ -619,7 +619,7 @@ fn test_simple_link_pop() {
         assert_eq!(0, best.height);
         for i in 0u32..=10 {
             let b1 = conf
-                .create_block(i + 1, "", |blk| {
+                .create_block(Hasher::zero(), i + 1, "", |blk| {
                     let best = idx.best().unwrap();
                     blk.header.prev = best.id;
                 })

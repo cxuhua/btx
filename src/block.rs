@@ -9,7 +9,9 @@ use crate::merkle::MerkleTree;
 use crate::script::*;
 use crate::store::Attr;
 use crate::util;
+use std::collections::HashMap;
 use std::convert::TryInto;
+
 /// 数据检测特性
 pub trait Checker: Sized {
     /// 检测值,收到区块或者完成区块时检测区块合法性
@@ -281,12 +283,29 @@ impl PartialEq for Block {
 
 impl Checker for Block {
     fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
+        //检测coinbase交易合法性
+        if self.txs.len() < 1 {
+            return Error::msg("txs count  < 1");
+        }
         if self.txs.len() > consts::MAX_TX_COUNT as usize {
             return Error::msg("txs count > MAX_TX_COUNT");
+        }
+        if self.txs[0].ins.len() != 1 {
+            return Error::msg("ins count == 0,coinbase miss");
+        }
+        if self.txs[0].ins[0].script.get_type()? != SCRIPT_TYPE_CB {
+            return Error::msg("ins type error,coinbase miss");
         }
         let conf = ctx.config();
         //检测区块头
         self.header.check_value(ctx)?;
+        //检测merkle
+        let merkle = self.compute_merkle()?;
+        if merkle != self.header.merkle {
+            return Error::msg("merkle tree id error");
+        }
+        //检测重复的交易,区块中不能存在消费同一个coin的情况
+        self.check_rep_cost_txout()?;
         //检测区块区块交易
         for iv in self.txs.iter() {
             iv.check_value(ctx)?
@@ -347,6 +366,20 @@ impl Serializer for Block {
 }
 
 impl Block {
+    /// 检测同一个区块内的重复消费
+    pub fn check_rep_cost_txout(&self) -> Result<(), Error> {
+        let mut map = HashMap::new();
+        for tx in self.txs.iter() {
+            for inv in &tx.ins {
+                let ikey = inv.out_key();
+                if map.get(&ikey).is_some() {
+                    return Error::msg("has rep cost exout");
+                }
+                map.insert(ikey.clone(), true);
+            }
+        }
+        Ok(())
+    }
     /// 区块是否调用完成
     pub fn is_finish(&self) -> bool {
         self.finish
@@ -652,6 +685,16 @@ pub struct TxIn {
     pub script: Script,
     ///序列号
     pub seq: u32,
+}
+
+impl TxIn {
+    /// 获取输出key
+    pub fn out_key(&self) -> IKey {
+        let mut w = Writer::default();
+        w.put_bytes(self.out.as_bytes());
+        w.u16(self.idx);
+        w.bytes().into()
+    }
 }
 
 impl Checker for TxIn {
