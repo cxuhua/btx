@@ -90,7 +90,7 @@ impl Serializer for TxAttr {
 }
 
 /// 区块存储属性
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlkAttr {
     pub bhv: Header, //区块头
     pub hhv: u32,    //当前区块高度
@@ -283,6 +283,7 @@ impl PartialEq for Block {
 
 impl Checker for Block {
     fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
+        let conf = ctx.config();
         //检测coinbase交易合法性
         if self.txs.len() < 1 {
             return Error::msg("txs count  < 1");
@@ -296,7 +297,6 @@ impl Checker for Block {
         if self.txs[0].ins[0].script.get_type()? != SCRIPT_TYPE_CB {
             return Error::msg("ins type error,coinbase miss");
         }
-        let conf = ctx.config();
         //检测区块头
         self.header.check_value(ctx)?;
         //检测merkle
@@ -337,7 +337,7 @@ impl Clone for Block {
             header: self.header.clone(),
             txs: self.txs.clone(),
             finish: self.finish,
-            attr: BlkAttr::default(),
+            attr: self.attr.clone(),
         }
     }
 }
