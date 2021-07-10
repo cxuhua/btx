@@ -305,7 +305,7 @@ impl Checker for Block {
             return Error::msg("merkle tree id error");
         }
         //检测重复的交易,区块中不能存在消费同一个coin的情况
-        self.check_rep_cost_txout()?;
+        self.check_rep_cost_coin()?;
         //检测区块区块交易
         for iv in self.txs.iter() {
             iv.check_value(ctx)?
@@ -367,7 +367,7 @@ impl Serializer for Block {
 
 impl Block {
     /// 检测同一个区块内的重复消费
-    pub fn check_rep_cost_txout(&self) -> Result<(), Error> {
+    pub fn check_rep_cost_coin(&self) -> Result<(), Error> {
         let mut map = HashMap::new();
         for tx in self.txs.iter() {
             for inv in &tx.ins {
