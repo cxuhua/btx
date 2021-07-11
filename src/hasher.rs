@@ -118,9 +118,10 @@ impl From<&BigUint> for Hasher {
 
 ///从16进制字符串获取
 impl TryFrom<&str> for Hasher {
-    type Error = hex::FromHexError;
+    type Error = errors::Error;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let b: Vec<u8> = Vec::from_hex(value.as_bytes())?;
+        let b: Vec<u8> =
+            Vec::from_hex(value.as_bytes()).map_or_else(errors::Error::std, |v| Ok(v))?;
         let mut v = Hasher::with_bytes(&b);
         v.inner.reverse();
         Ok(v)
@@ -200,16 +201,11 @@ impl Hasher {
         }
         return self.compact();
     }
-    ///工作量证明检测
+    /// bits需要达到的难度
+    /// pl最小工作难度
+    /// self当前区块id
     pub fn verify_pow(&self, pl: &Hasher, bits: u32) -> bool {
-        if let Ok(v) = Hasher::try_from(bits) {
-            //如果比最小难度大
-            if &v > pl {
-                return false;
-            }
-            return self <= &v;
-        }
-        false
+        Hasher::try_from(bits).map_or(false, |ref v| pl >= v && self <= v)
     }
     //获取低64位
     fn low64(v: &Vec<u32>) -> u64 {

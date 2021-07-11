@@ -94,6 +94,7 @@ impl Config {
         //计算工作量
         let mut id = blk.id()?;
         let mut count = 0;
+        //验证工作难度
         while !id.verify_pow(&self.pow_limit, blk.header.bits) && count < 1024 * 1024 {
             blk.header.nonce += 1;
             id = blk.id()?;
