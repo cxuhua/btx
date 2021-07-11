@@ -282,6 +282,27 @@ impl BlkIndexer {
         let key: IKey = Self::BEST_KEY.into();
         self.leveldb.get(&key)
     }
+    ///获取下个区块难度
+    pub fn next_bits(&mut self)-> Result<u32,Error> {
+        let best = self.best();
+        if best.is_err() {
+            return Ok(self.conf.pow_limit.compact());
+        }
+        let best = best.unwrap();
+        if best.height == 0 {
+            return Ok(self.conf.pow_limit.compact());
+        }
+        let last = self.get(&best.id.as_ref().into())?;
+        let next = best.next();
+        if next % self.conf.pow_span != 0 {
+            return Ok(last.header.bits);
+        }
+        let prev = next - self.conf.pow_span;
+        let prev = self.get(&prev.into())?;
+        let ct = last.header.get_timestamp();
+        let pt = prev.header.get_timestamp();
+        Ok(self.conf.pow_limit.compute_bits(self.conf.pow_time,ct,pt,last.header.bits))
+    }
     /// 获取账户对应的金额列表
     pub fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
         let mut coins: Vec<CoinAttr> = vec![];
@@ -574,8 +595,20 @@ impl Chain {
     }
     /// 链接一个新区块到链上
     pub fn link(&self, blk: &Block) -> Result<Best, Error> {
-        self.do_write(|v| {
-            blk.check_value(v)?;
+        self.do_write(|ctx| {
+            let conf = ctx.config();
+            //检测工作难度是否达到设置的要求
+            let id = blk.id()?;
+            if !id.verify_pow(&conf.pow_limit, blk.header.bits) {
+                return Error::msg("block bits error");
+            }
+            //计算并检测下个区块难度
+            let bits = v.next_bits()?;
+            if blk.header.bits != bits {
+                return Error::msg("link block bits error")
+            }
+            //检测区块基本数据
+            blk.check_value(ctx)?;
             v.link(blk)
         })
     }

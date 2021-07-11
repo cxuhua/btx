@@ -18,11 +18,11 @@ pub struct Config {
     /// 第一个区块id
     pub genesis: Hasher,
     /// 难度调整周期
-    pub pow_time: usize, //14 * 24 * 60 * 60=1209600
+    pub pow_time: u32, //14 * 24 * 60 * 60=1209600
     /// 难度区块间隔
-    pub pow_span: usize, //2016
+    pub pow_span: u32, //2016
     /// 减半配置
-    pub halving: usize, //210000
+    pub halving: u32, //210000
     /// 区块版本
     pub ver: u16,
     /// 默认账户信息
@@ -32,7 +32,7 @@ pub struct Config {
 impl Config {
     /// 计算某高度下可获的奖励
     pub fn compute_reward(&self, h: u32) -> i64 {
-        let hlv = (h as usize) / self.halving;
+        let hlv = h / self.halving;
         if hlv >= 64 {
             return 0;
         }

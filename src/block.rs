@@ -27,6 +27,10 @@ pub struct Best {
 }
 
 impl Best {
+    /// 获取下一个高度
+    pub fn next(&self) ->u32 {
+        self.height + 1
+    }
     /// 是否是有效的记录
     pub fn is_valid(&self) -> bool {
         self.id != Hasher::zero() && self.height != u32::MAX
@@ -283,7 +287,6 @@ impl PartialEq for Block {
 
 impl Checker for Block {
     fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
-        let conf = ctx.config();
         //检测coinbase交易合法性
         if self.txs.len() < 1 {
             return Error::msg("txs count  < 1");
@@ -311,11 +314,6 @@ impl Checker for Block {
             iv.check_value(ctx)?
         }
         //检测金额是否正确 输入 > 输出
-        //检测工作难度是否达到设置的要求
-        let id = self.id()?;
-        if !id.verify_pow(&conf.pow_limit, self.header.bits) {
-            return Error::msg("block bits error");
-        }
         Ok(())
     }
 }
