@@ -404,8 +404,6 @@ impl BlkIndexer {
         let (mut cfee, mut ofee, mut ifee, mut tfee, rfee) =
             (0, 0, 0, 0, self.conf.compute_reward(next));
         for tx in blk.txs.iter() {
-            ifee = 0;
-            ofee = 0;
             for inv in tx.ins.iter() {
                 //coinbase交易不包含金额信息
                 if inv.is_coinbase() {
@@ -465,11 +463,13 @@ impl BlkIndexer {
             if !consts::is_valid_amount(tfee) {
                 return Error::msg("tfee  error");
             }
+            ifee = 0;
+            ofee = 0;
         }
         if !consts::is_valid_amount(cfee) || !consts::is_valid_amount(rfee) {
             return Error::msg("cfee or rfee error");
         }
-        //coinbase输出金额不能 > 奖励+交易
+        //coinbase输出金额不能 > 奖励 + 交易费
         if cfee > rfee + tfee {
             return Error::msg("cfee > rfee + tfee");
         }
