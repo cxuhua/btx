@@ -28,7 +28,7 @@ pub struct Best {
 
 impl Best {
     /// 获取下一个高度
-    pub fn next(&self) ->u32 {
+    pub fn next(&self) -> u32 {
         self.height + 1
     }
     /// 是否是有效的记录
@@ -287,21 +287,10 @@ impl PartialEq for Block {
 
 impl Checker for Block {
     fn check_value(&self, ctx: &BlkIndexer) -> Result<(), Error> {
-        //检测coinbase交易合法性
-        if self.txs.len() < 1 {
-            return Error::msg("txs count  < 1");
-        }
-        if self.txs.len() > consts::MAX_TX_COUNT as usize {
-            return Error::msg("txs count > MAX_TX_COUNT");
-        }
-        if self.txs[0].ins.len() != 1 {
-            return Error::msg("ins count == 0,coinbase miss");
-        }
-        if self.txs[0].ins[0].script.get_type()? != SCRIPT_TYPE_CB {
-            return Error::msg("ins type error,coinbase miss");
-        }
         //检测区块头
         self.header.check_value(ctx)?;
+        //检测coinbase交易合法性
+        self.check_coinbase()?;
         //检测merkle
         let merkle = self.compute_merkle()?;
         if merkle != self.header.merkle {
@@ -313,7 +302,6 @@ impl Checker for Block {
         for iv in self.txs.iter() {
             iv.check_value(ctx)?
         }
-        //检测金额是否正确 输入 > 输出
         Ok(())
     }
 }
@@ -364,6 +352,32 @@ impl Serializer for Block {
 }
 
 impl Block {
+    ///检测coinbase是否存在
+    pub fn check_coinbase(&self) -> Result<(), Error> {
+        if self.txs.len() < 1 {
+            return Error::msg("txs count  < 1");
+        }
+        if self.txs.len() > consts::MAX_TX_COUNT as usize {
+            return Error::msg("txs count > MAX_TX_COUNT");
+        }
+        if self.txs[0].ins.len() != 1 {
+            return Error::msg("ins count == 0,coinbase miss");
+        }
+        if self.txs[0].ins[0].script.get_type()? != SCRIPT_TYPE_CB {
+            return Error::msg("ins type error,coinbase miss");
+        }
+        Ok(())
+    }
+    /// 获取coinbase交易金额
+    pub fn coinbase_fee(&self) -> Result<i64, Error> {
+        if self.txs.len() == 0 {
+            return Error::msg("block txs empty");
+        }
+        if !self.txs[0].is_coinbase() {
+            return Error::msg("block coinbase miss");
+        }
+        self.txs[0].coinbase_fee()
+    }
     /// 检测同一个区块内的重复消费
     pub fn check_rep_cost_coin(&self) -> Result<(), Error> {
         let mut map = HashMap::new();
@@ -538,6 +552,20 @@ impl Checker for Tx {
 }
 
 impl Tx {
+    /// 获取coinbase金额
+    pub fn coinbase_fee(&self) -> Result<i64, Error> {
+        if !self.is_coinbase() {
+            return Error::msg("tx not coinbase");
+        }
+        let mut fee: i64 = 0;
+        for outv in self.outs.iter() {
+            fee += outv.value;
+        }
+        if !consts::is_valid_amount(fee) {
+            return Error::msg("fee not vaild");
+        }
+        Ok(fee)
+    }
     /// 获取输出
     pub fn get_out(&self, idx: usize) -> Result<&TxOut, Error> {
         if idx >= self.outs.len() {
