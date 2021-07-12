@@ -24,6 +24,12 @@ use std::sync::RwLock;
 #[derive(PartialEq, Eq, Clone, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
 
+/// 自身包含key的兑现无需指定写入key
+pub trait HasKey {
+    //返回对象的key
+    fn key(&self) -> IKey;
+}
+
 ///
 impl Key for IKey {
     fn from_u8(key: &[u8]) -> IKey {
@@ -155,6 +161,18 @@ impl Default for CoinAttr {
     }
 }
 
+/// coin可以作为兑现直接按次key存储
+impl HasKey for CoinAttr {
+    /// 获取存储key
+    fn key(&self) -> IKey {
+        let mut w = Writer::default();
+        w.encode(&self.cpk);
+        w.encode(&self.tx);
+        w.u16(self.idx);
+        IKey::from_u8(w.bytes())
+    }
+}
+
 impl CoinAttr {
     /// 金额在spent高度上是否可用
     pub fn is_matured(&self, spent: u32) -> bool {
@@ -164,14 +182,6 @@ impl CoinAttr {
         }
         //coinbase输出必须在100个高度后才可消费
         return spent - self.height >= consts::COINBASE_MATURITY;
-    }
-    /// 获取存储key
-    pub fn key(&self) -> IKey {
-        let mut w = Writer::default();
-        w.encode(&self.cpk);
-        w.encode(&self.tx);
-        w.u16(self.idx);
-        IKey::from_u8(w.bytes())
     }
     /// 从存储key获取
     pub fn from_key(k: &IKey) -> Result<Self, Error> {
@@ -388,15 +398,16 @@ impl BlkIndexer {
     /// 这个检测的区块是新连入的区块,需要检测引用的coin是否在链中
     /// 并且检测签名是否正确
     fn check_block_amount(&mut self, next: u32, blk: &Block) -> Result<(), Error> {
-        //获取区块奖励
-        let rfee = self.conf.compute_reward(next);
-        if !consts::is_valid_amount(rfee) {
-            return Error::msg("coinbase reward amount error");
-        }
-        //输入和输出的总金额
-        let (mut ofee, mut ifee) = (0, 0);
+        //coinbase输出，输入, 输出, 交易费, 区块奖励
+        //1.每个交易的输出<=输入,差值就是交易费用，可包含在coinbase输出中
+        //3.coinbase输出 <= (区块奖励+交易费)
+        let (mut cfee, mut ofee, mut ifee, mut tfee, rfee) =
+            (0, 0, 0, 0, self.conf.compute_reward(next));
         for tx in blk.txs.iter() {
+            ifee = 0;
+            ofee = 0;
             for inv in tx.ins.iter() {
+                //coinbase交易不包含金额信息
                 if inv.is_coinbase() {
                     continue;
                 }
@@ -437,8 +448,30 @@ impl BlkIndexer {
                 exector.exec(&script, env)?;
             }
             for outv in tx.outs.iter() {
-                ofee += outv.value;
+                if tx.is_coinbase() {
+                    cfee += outv.value;
+                } else {
+                    ofee += outv.value;
+                }
             }
+            if !consts::is_valid_amount(ifee) || !consts::is_valid_amount(ofee) {
+                return Error::msg("ifee or ofee error");
+            }
+            if ifee > ofee {
+                return Error::msg("tx input fee > tx out fee");
+            }
+            //累加交易费
+            tfee += ifee - ofee;
+            if !consts::is_valid_amount(tfee) {
+                return Error::msg("tfee  error");
+            }
+        }
+        if !consts::is_valid_amount(cfee) || !consts::is_valid_amount(rfee) {
+            return Error::msg("cfee or rfee error");
+        }
+        //coinbase输出金额不能 > 奖励+交易
+        if cfee > rfee + tfee {
+            return Error::msg("cfee > rfee + tfee");
         }
         Ok(())
     }
@@ -626,7 +659,7 @@ impl BlkIndexer {
             coin.value = outv.value;
             coin.base = base;
             coin.height = best.height;
-            batch.put(&coin.key(), &coin);
+            batch.put_attr(&coin);
         }
         Ok(())
     }

@@ -1,5 +1,5 @@
 use crate::errors::Error;
-use crate::index::IKey;
+use crate::index::{HasKey, IKey};
 use crate::iobuf::{Reader, Serializer, Writer};
 use leveldb::database::batch::{Batch, Writebatch, WritebatchIterator};
 use leveldb::database::cache::Cache;
@@ -90,6 +90,19 @@ impl IBatch {
         self.b.put(k.clone(), wb.bytes());
         if let Some(ref mut fv) = self.f {
             fv.delete(k.clone())
+        }
+    }
+    /// 添加kv数据
+    pub fn put_attr<V>(&mut self, v: &V)
+    where
+        V: Serializer + HasKey,
+    {
+        let kv = v.key();
+        let wb = v.pack();
+        assert!(kv.len() < MAX_KEY_VALUE && wb.len() < MAX_KEY_VALUE);
+        self.b.put(kv.clone(), wb.bytes());
+        if let Some(ref mut fv) = self.f {
+            fv.delete(kv);
         }
     }
     /// 替换数据,同key放入新数据,然后旧的作为回退写入回退数据
