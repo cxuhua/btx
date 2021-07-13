@@ -583,7 +583,7 @@ impl Tx {
         self.ins.len() > 0 && self.ins[0].is_coinbase()
     }
     /// 编码签名数据
-    fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
+    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.u32(self.ver);
         wb.u16(self.ins.len() as u16);
         for inv in self.ins.iter() {
@@ -801,7 +801,7 @@ impl TxIn {
         self.out == Hasher::zero() && self.idx == 0
     }
     /// 获取需要签名的数据
-    fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
+    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.encode(&self.out);
         wb.u16(self.idx);
         self.script.encode_sign(wb)?;
@@ -920,7 +920,8 @@ impl HasAddress for TxOut {
 }
 
 impl TxOut {
-    fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
+    /// 签名用编码数据
+    pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {
         wb.i64(self.value);
         self.script.encode_sign(wb)?;
         Ok(())

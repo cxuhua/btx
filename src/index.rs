@@ -266,18 +266,58 @@ pub struct BlkIndexer {
     conf: Config,     //配置信息
 }
 
+/// 签名验证数据缓存
+struct LinkExectorCache {
+    outs: Hasher, //输出hash缓存 tx.outs
+    refs: Hasher, //引用hash缓存 tx.ins.out tx.ins.idx
+}
+
+impl LinkExectorCache {
+    fn new(tx: &Tx) -> Result<Self, Error> {
+        let mut outs = Writer::default();
+        for outv in tx.outs.iter() {
+            outv.encode_sign(&mut outs)?;
+        }
+        let mut refs = Writer::default();
+        for inv in tx.ins.iter() {
+            refs.encode(&inv.out);
+            refs.u16(inv.idx);
+        }
+        Ok(LinkExectorCache {
+            outs: Hasher::hash(outs.bytes()),
+            refs: Hasher::hash(refs.bytes()),
+        })
+    }
+}
+
 /// 区块链接脚本执行签名验证
 struct LinkExectorEnv<'a> {
-    tx: &'a Tx,         //当前交易
-    inv: &'a TxIn,      //当前输入
-    outv: &'a TxOut,    //输入对应的输出
-    coin: &'a CoinAttr, //输入引用的金额
+    tx: &'a Tx,                  //当前交易
+    inv: &'a TxIn,               //当前输入
+    idx: u16,                    //inv索引
+    outv: &'a TxOut,             //输入对应的输出
+    coin: &'a CoinAttr,          //输入引用的金额
+    cache: &'a LinkExectorCache, //执行交易缓存
+}
+
+impl<'a> LinkExectorEnv<'a> {
+    //获取签名数据
+    fn get_sign_bytes(&self) -> Result<Writer, Error> {
+        let mut w = Writer::default();
+        w.u32(self.tx.ver); //版本
+        w.encode(&self.cache.refs); //引用hash
+        self.inv.encode_sign(&mut w)?; //输入
+        self.outv.encode_sign(&mut w)?; //引用的输出
+        w.encode(&self.cache.outs); //输出hash
+        Ok(w)
+    }
 }
 
 impl<'a> ExectorEnv for LinkExectorEnv<'a> {
     fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
+        let msg = self.get_sign_bytes()?;
         let a: Account = ele.try_into()?;
-        a.verify("aaa".as_bytes())
+        a.verify(msg.bytes())
     }
 }
 
@@ -403,7 +443,9 @@ impl BlkIndexer {
         //3.coinbase输出 <= (区块奖励+交易费)
         let (mut cfee, mut ofee, mut ifee, mut tfee, rfee) =
             (0, 0, 0, 0, self.conf.compute_reward(next));
-        for tx in blk.txs.iter() {
+        for (i, tx) in blk.txs.iter().enumerate() {
+            //为签名创建交易缓存器数据
+            let cache = LinkExectorCache::new(&tx)?;
             for inv in tx.ins.iter() {
                 //coinbase交易不包含金额信息
                 if inv.is_coinbase() {
@@ -437,8 +479,10 @@ impl BlkIndexer {
                 let env = &LinkExectorEnv {
                     tx: &tx,
                     inv: &inv,
+                    idx: i as u16,
                     outv: &outv,
                     coin: &coin,
+                    cache: &cache,
                 };
                 let mut script = inv.script.clone();
                 let script = script.concat(&outv.script);
