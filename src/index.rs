@@ -250,6 +250,29 @@ fn test_coin_attr_key_value() {
 fn test_block_index_coin_save() {
     Config::test(|conf, idx| {
         let acc = conf.acc.as_ref().unwrap();
+        //只加入的genesis区块
+        let best = idx.best().unwrap();
+        assert_eq!(best.id, conf.genesis);
+        let coins = idx.coins(&acc).unwrap();
+        assert_eq!(1, coins.len());
+        assert_eq!(coins[0].cpk, acc.hash().unwrap());
+        assert_eq!(coins[0].value, consts::coin(50));
+        assert_eq!(coins[0].base, 1);
+        assert_eq!(coins[0].height, 0);
+        //链接一个新的区块
+        let blk = idx.new_block("secode", |_| {}).unwrap();
+        let best = idx.link(&blk).unwrap();
+        assert_eq!(best.height, 1);
+        let coins = idx.coins(&acc).unwrap();
+        assert_eq!(2, coins.len());
+        assert_eq!(coins[0].height, 0);
+        assert_eq!(coins[1].cpk, acc.hash().unwrap());
+        assert_eq!(coins[1].value, consts::coin(50));
+        assert_eq!(coins[1].base, 1);
+        assert_eq!(coins[1].height, 1);
+        let pop = idx.pop().unwrap();
+        assert_eq!(pop.id().unwrap(), blk.id().unwrap());
+        //弹出一个只剩下genesis区块了
         let best = idx.best().unwrap();
         assert_eq!(best.id, conf.genesis);
         let coins = idx.coins(&acc).unwrap();
@@ -418,6 +441,8 @@ impl BlkIndexer {
             value.fill_key(key)?;
             coins.push(value);
         }
+        //按所在区块高度从小到大排序
+        coins.sort_by(|a, b| a.height.cmp(&b.height));
         Ok(coins)
     }
     /// 获取属性信息
@@ -472,6 +497,38 @@ impl BlkIndexer {
         blk.rev = attr.rev;
         //加入缓存并返回
         self.cache.put(k, &blk)
+    }
+    /// 获取区块交易费,不检测区块有效性,引用的coin可能已经被消费了,只计算金额
+    pub fn get_block_transaction_fee(&mut self, blk: &Block) -> Result<i64, Error> {
+        let (mut ofee, mut ifee, mut tfee) = (0, 0, 0);
+        for tx in blk.txs.iter() {
+            //coinbase不包含有效的交易费
+            if tx.is_coinbase() {
+                continue;
+            }
+            for inv in tx.ins.iter() {
+                //获取引用的输入金额
+                let outv = self.get_txin_ref_txout(&inv)?;
+                ifee += outv.value;
+            }
+            for outv in tx.outs.iter() {
+                ofee += outv.value;
+            }
+            if !consts::is_valid_amount(ifee) || !consts::is_valid_amount(ofee) {
+                return Error::msg("ifee or ofee error");
+            }
+            if ofee > ifee {
+                return Error::msg("tx out fee > tx input fee");
+            }
+            //累加交易费
+            tfee += ifee - ofee;
+            if !consts::is_valid_amount(tfee) {
+                return Error::msg("tfee error");
+            }
+            ifee = 0;
+            ofee = 0;
+        }
+        Ok(tfee)
     }
     /// 检测区块的金额
     /// 这个检测的区块是新连入的区块,需要检测引用的coin是否在链中
@@ -530,6 +587,12 @@ impl BlkIndexer {
                 exector.exec(&script, env)?;
             }
             for outv in tx.outs.iter() {
+                if !consts::is_valid_amount(outv.value) {
+                    return Error::msg("outv value error");
+                }
+                if outv.value == 0 {
+                    return Error::msg("outv value error");
+                }
                 if tx.is_coinbase() {
                     cfee += outv.value;
                 } else {
@@ -752,6 +815,9 @@ impl BlkIndexer {
     pub fn pop(&mut self) -> Result<Block, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
+        if best.id == self.conf.genesis {
+            return Error::msg("genesis block can't pop");
+        }
         let ref idkey = best.id_key();
         let attr: BlkAttr = self.leveldb.get(idkey)?;
         //读取区块数据
@@ -774,6 +840,13 @@ impl BlkIndexer {
 pub struct Chain(RwLock<BlkIndexer>);
 
 impl Chain {
+    /// 从当前链顶创建一个新区块
+    pub fn new_block<F>(&self, cbstr: &str, ff: F) -> Result<Block, Error>
+    where
+        F: FnOnce(&mut Block),
+    {
+        self.do_write(|v| v.new_block(cbstr, ff))
+    }
     /// lock read process
     fn do_read<R, F>(&self, f: F) -> Result<R, Error>
     where
