@@ -9,7 +9,7 @@ use crate::merkle::MerkleTree;
 use crate::script::*;
 use crate::store::Attr;
 use crate::util;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::convert::TryInto;
 
 /// 数据检测特性
@@ -162,6 +162,12 @@ pub struct Header {
 }
 
 impl Header {
+    /// 计算区块id
+    pub fn id(&self) -> Result<Hasher, Error> {
+        let mut wb = Writer::default();
+        self.encode(&mut wb);
+        Ok(Hasher::hash(&wb.bytes()))
+    }
     /// 合并区块时间戳倍率和区块版本到一个整数
     fn block_version(r: u16, v: u16) -> u32 {
         (v as u32) | (r as u32) << 16
@@ -273,10 +279,14 @@ pub struct Block {
     pub header: Header,
     ///交易列表
     pub txs: Vec<Tx>,
+    //当前区块高度
+    pub hhv: u32,
+    //数据存储位置
+    pub blk: Attr,
+    //回退数据存储
+    pub rev: Attr,
     //是否完成
     finish: bool,
-    //加载时保存区块信息
-    pub attr: BlkAttr,
 }
 
 impl PartialEq for Block {
@@ -291,7 +301,7 @@ impl Checker for Block {
         self.header.check_value(ctx)?;
         //检测coinbase交易合法性
         self.check_coinbase()?;
-        //检测merkle
+        //检测merkle树id应该一致
         let merkle = self.compute_merkle()?;
         if merkle != self.header.merkle {
             return Error::msg("merkle tree id error");
@@ -299,8 +309,20 @@ impl Checker for Block {
         //检测重复的交易,区块中不能存在消费同一个coin的情况
         self.check_rep_cost_coin()?;
         //检测区块区块交易
+        let mut coinnum = 0;
         for iv in self.txs.iter() {
+            if iv.is_coinbase() {
+                coinnum += 1
+            }
             iv.check_value(ctx)?
+        }
+        //检测coinbase是否唯一
+        if coinnum != 1 {
+            return Error::msg("coinbase tx num error");
+        }
+        //检测区块最大小
+        if self.get_size() > consts::MAX_BLOCK_SIZE {
+            return Error::msg("block size > MAX_BLOCK_SIZE");
         }
         Ok(())
     }
@@ -311,8 +333,10 @@ impl Default for Block {
         Block {
             header: Header::default(),
             txs: vec![],
+            hhv: 0,
+            blk: Attr::default(),
+            rev: Attr::default(),
             finish: false,
-            attr: BlkAttr::default(),
         }
     }
 }
@@ -322,8 +346,10 @@ impl Clone for Block {
         Block {
             header: self.header.clone(),
             txs: self.txs.clone(),
+            hhv: 0,
+            blk: Attr::default(),
+            rev: Attr::default(),
             finish: self.finish,
-            attr: self.attr.clone(),
         }
     }
 }
@@ -352,6 +378,12 @@ impl Serializer for Block {
 }
 
 impl Block {
+    /// 获取区块大小
+    pub fn get_size(&self) -> usize {
+        let mut w = Writer::default();
+        self.encode(&mut w);
+        w.len()
+    }
     ///检测coinbase是否存在
     pub fn check_coinbase(&self) -> Result<(), Error> {
         if self.txs.len() < 1 {
@@ -380,14 +412,12 @@ impl Block {
     }
     /// 检测同一个区块内的重复消费
     pub fn check_rep_cost_coin(&self) -> Result<(), Error> {
-        let mut map = HashMap::new();
+        let mut map = HashSet::new();
         for tx in self.txs.iter() {
             for inv in &tx.ins {
-                let ikey = inv.out_key();
-                if map.get(&ikey).is_some() {
+                if !map.insert(inv.out_key()) {
                     return Error::msg("has rep cost exout");
                 }
-                map.insert(ikey.clone(), true);
             }
         }
         Ok(())
@@ -411,9 +441,7 @@ impl Block {
     }
     /// 计算区块id
     pub fn id(&self) -> Result<Hasher, Error> {
-        let mut wb = Writer::default();
-        self.header.encode(&mut wb);
-        Ok(Hasher::hash(&wb.bytes()))
+        self.header.id()
     }
     /// 获取区块数据
     pub fn bytes(&self) -> Writer {
@@ -537,21 +565,49 @@ impl Checker for Tx {
         if self.is_coinbase() && self.ins.len() != 1 {
             return Error::msg("InvalidTx");
         }
+        //输入不能为空
+        if self.ins.len() == 0 {
+            return Error::msg("InvalidTx,inputs empty");
+        }
         //输出不能为空
         if self.outs.len() == 0 {
-            return Error::msg("InvalidTx");
+            return Error::msg("InvalidTx,outs empty");
         }
-        for iv in self.ins.iter() {
-            iv.check_value(ctx)?;
+        //检测输入和输入是否重复
+        let mut map = HashSet::new();
+        for inv in self.ins.iter() {
+            inv.check_value(ctx)?;
+            if !map.insert(inv.out_key()) {
+                return Error::msg("InvalidTx,inout out rep");
+            }
         }
-        for iv in self.outs.iter() {
-            iv.check_value(ctx)?
+        //检测输出和输出金额
+        let mut outfee = 0;
+        for outv in self.outs.iter() {
+            outv.check_value(ctx)?;
+            if !consts::is_valid_amount(outv.value) {
+                return Error::msg("out value not valid");
+            }
+            outfee += outv.value;
+            if !consts::is_valid_amount(outfee) {
+                return Error::msg("outfee not valid");
+            }
+        }
+        //大小不能超过
+        if self.get_size() > consts::MAX_BLOCK_SIZE {
+            return Error::msg("InvalidTx,size >  MAX_BLOCK_SIZE");
         }
         Ok(())
     }
 }
 
 impl Tx {
+    /// 获取交易大小
+    pub fn get_size(&self) -> usize {
+        let mut w = Writer::default();
+        self.encode(&mut w);
+        w.len()
+    }
     /// 获取coinbase金额
     pub fn coinbase_fee(&self) -> Result<i64, Error> {
         if !self.is_coinbase() {
@@ -725,6 +781,10 @@ impl TxIn {
 
 impl Checker for TxIn {
     fn check_value(&self, _ctx: &BlkIndexer) -> Result<(), Error> {
+        //检测非coinbase输出是否正确
+        if !self.is_coinbase() && (self.out.is_zero() || self.idx == 0) {
+            return Error::msg("input out idx error");
+        }
         //检测脚本类型,输入必须输入或者cb脚本
         let typ = self.script.get_type()?;
         if self.is_coinbase() {
@@ -798,7 +858,12 @@ impl TxIn {
     }
     /// 是否是coinbase输入
     pub fn is_coinbase(&self) -> bool {
-        self.out == Hasher::zero() && self.idx == 0
+        self.out == Hasher::zero()
+            && self.idx == 0
+            && self
+                .script
+                .get_type()
+                .map_or(false, |v| v == SCRIPT_TYPE_CB)
     }
     /// 获取需要签名的数据
     pub fn encode_sign(&self, wb: &mut Writer) -> Result<(), Error> {

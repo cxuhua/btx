@@ -24,3 +24,5 @@ pub const BASE_UTC_UNIX_TIME: i64 = 1577836800;
 pub const MAX_TX_COUNT: u16 = 0xFFFF;
 /// coinbase交易在100个确认后可用
 pub const COINBASE_MATURITY: u32 = 100;
+/// 区块最大大小
+pub const MAX_BLOCK_SIZE: usize = 1024 * 1024 * 4;

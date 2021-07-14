@@ -15,3 +15,6 @@ pub mod merkle;
 pub mod script;
 pub mod store;
 pub mod util;
+
+#[macro_use]
+extern crate lazy_static;

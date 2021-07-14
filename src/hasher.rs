@@ -172,7 +172,11 @@ impl Hasher {
     }
     ///空hash
     pub fn zero() -> Self {
-        return Hasher { inner: [0u8; SIZE] };
+        Hasher { inner: [0u8; SIZE] }
+    }
+    ///是否空hash
+    pub fn is_zero(&self) -> bool {
+        self == &Hasher::zero()
     }
     /// 计算下个区块工作难度
     /// self: 最小工作难度

@@ -174,6 +174,10 @@ impl HasKey for CoinAttr {
 }
 
 impl CoinAttr {
+    /// 是否来自coinbase交易
+    pub fn is_coinbase(&self) -> bool {
+        self.base & 0b1 == 1
+    }
     /// 金额在spent高度上是否可用
     pub fn is_matured(&self, spent: u32) -> bool {
         //非coinbase可用
@@ -273,6 +277,7 @@ struct LinkExectorCache {
 }
 
 impl LinkExectorCache {
+    /// 创建缓存
     fn new(tx: &Tx) -> Result<Self, Error> {
         let mut outs = Writer::default();
         for outv in tx.outs.iter() {
@@ -294,9 +299,7 @@ impl LinkExectorCache {
 struct LinkExectorEnv<'a> {
     tx: &'a Tx,                  //当前交易
     inv: &'a TxIn,               //当前输入
-    idx: u16,                    //inv索引
     outv: &'a TxOut,             //输入对应的输出
-    coin: &'a CoinAttr,          //输入引用的金额
     cache: &'a LinkExectorCache, //执行交易缓存
 }
 
@@ -316,8 +319,8 @@ impl<'a> LinkExectorEnv<'a> {
 impl<'a> ExectorEnv for LinkExectorEnv<'a> {
     fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
         let msg = self.get_sign_bytes()?;
-        let a: Account = ele.try_into()?;
-        a.verify(msg.bytes())
+        let acc: Account = ele.try_into()?;
+        acc.verify(msg.bytes())
     }
 }
 
@@ -326,10 +329,23 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
+    /// 创建下个区块
+    /// 保证第一个区块已经链接到链
+    /// cbstr: coinbase区块自定义信息
+    pub fn new_block<F>(&mut self, cbstr: &str, ff: F) -> Result<Block, Error>
+    where
+        F: FnOnce(&mut Block),
+    {
+        let best = self.best()?;
+        let height = best.next();
+        let bits = self.next_bits()?;
+        self.conf.create_block(best.id, height, bits, cbstr, ff)
+    }
     /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
     /// 最高区块入口存储key
     const BEST_KEY: &'static str = "__best__key__";
+    /// 创建区块索引存储对象
     fn new(conf: &Config) -> Result<Self, Error> {
         let dir = &conf.dir;
         util::miss_create_dir(&dir)?;
@@ -369,19 +385,19 @@ impl BlkIndexer {
         if best.height == 0 {
             return Ok(self.conf.pow_limit.compact());
         }
-        let last = self.get(&best.id.as_ref().into())?;
+        let last: BlkAttr = self.attr(&best.id.as_ref().into())?;
         let next = best.next();
         if next % self.conf.pow_span != 0 {
-            return Ok(last.header.bits);
+            return Ok(last.bhv.bits);
         }
         let prev = next - self.conf.pow_span;
-        let prev = self.get(&prev.into())?;
-        let ct = last.header.get_timestamp();
-        let pt = prev.header.get_timestamp();
+        let prev: BlkAttr = self.attr(&prev.into())?;
+        let ct = last.bhv.get_timestamp();
+        let pt = prev.bhv.get_timestamp();
         Ok(self
             .conf
             .pow_limit
-            .compute_bits(self.conf.pow_time, ct, pt, last.header.bits))
+            .compute_bits(self.conf.pow_time, ct, pt, last.bhv.bits))
     }
     /// 获取账户对应的金额列表
     pub fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
@@ -411,6 +427,26 @@ impl BlkIndexer {
     {
         self.leveldb.get(k)
     }
+    //从区块属性加载区块信息
+    pub fn load(&mut self, attr: &BlkAttr) -> Result<Arc<Block>, Error> {
+        let id = attr.bhv.id()?;
+        let key: IKey = id.as_ref().into();
+        //如果缓存中存在
+        if let Ok(v) = self.cache.get(&key) {
+            return Ok(v);
+        }
+        //读取区块数据
+        let buf = self.blk.pull(&attr.blk)?;
+        //解析成区块
+        let mut reader = Reader::new(&buf);
+        let mut blk: Block = reader.decode()?;
+        //保存区块其他属性
+        blk.hhv = attr.hhv;
+        blk.blk = attr.blk.clone();
+        blk.rev = attr.rev.clone();
+        //加入缓存并返回
+        self.cache.put(&key, &blk)
+    }
     /// 从索引中获取区块
     /// 获取的区块只能读取
     pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
@@ -430,7 +466,10 @@ impl BlkIndexer {
         //解析成区块
         let mut reader = Reader::new(&buf);
         let mut blk: Block = reader.decode()?;
-        blk.attr = attr;
+        //保存区块其他属性
+        blk.hhv = attr.hhv;
+        blk.blk = attr.blk;
+        blk.rev = attr.rev;
         //加入缓存并返回
         self.cache.put(k, &blk)
     }
@@ -443,7 +482,10 @@ impl BlkIndexer {
         //3.coinbase输出 <= (区块奖励+交易费)
         let (mut cfee, mut ofee, mut ifee, mut tfee, rfee) =
             (0, 0, 0, 0, self.conf.compute_reward(next));
-        for (i, tx) in blk.txs.iter().enumerate() {
+        if !consts::is_valid_amount(rfee) {
+            return Error::msg("rfee  error");
+        }
+        for tx in blk.txs.iter() {
             //为签名创建交易缓存器数据
             let cache = LinkExectorCache::new(&tx)?;
             for inv in tx.ins.iter() {
@@ -479,9 +521,7 @@ impl BlkIndexer {
                 let env = &LinkExectorEnv {
                     tx: &tx,
                     inv: &inv,
-                    idx: i as u16,
                     outv: &outv,
-                    coin: &coin,
                     cache: &cache,
                 };
                 let mut script = inv.script.clone();
@@ -499,8 +539,8 @@ impl BlkIndexer {
             if !consts::is_valid_amount(ifee) || !consts::is_valid_amount(ofee) {
                 return Error::msg("ifee or ofee error");
             }
-            if ifee > ofee {
-                return Error::msg("tx input fee > tx out fee");
+            if ofee > ifee {
+                return Error::msg("tx out fee > tx input fee");
             }
             //累加交易费
             tfee += ifee - ofee;
@@ -539,7 +579,7 @@ impl BlkIndexer {
         if !id.verify_pow(&self.conf.pow_limit, blk.header.bits) {
             return Error::msg("block bits error");
         }
-        //计算并检测下个区块难度
+        //计算并检测下个区块难度,当前链入的区块难度应该和计算出来的一致
         let bits = self.next_bits()?;
         if blk.header.bits != bits {
             return Error::msg("link block bits error");
@@ -584,11 +624,11 @@ impl BlkIndexer {
             if self.leveldb.has(&txid.into()) {
                 return Error::msg("txid exists block index");
             }
-            let iv = TxAttr {
+            let txattr = TxAttr {
                 blk: id.clone(), //此交易指向的区块
                 idx: i as u16,   //在区块的位置
             };
-            batch.put(&txid.into(), &iv);
+            batch.put(&txid.into(), &txattr);
             self.write_tx_index(&mut batch, &best, &tx)?;
         }
         //id对应的区块头属性
@@ -650,7 +690,7 @@ impl BlkIndexer {
         if tx.is_coinbase() {
             coin.base = 1;
         }
-        coin.height = blk.attr.hhv;
+        coin.height = blk.hhv;
         Ok(coin)
     }
     /// 获取金额信息
@@ -775,10 +815,12 @@ impl Chain {
     pub fn get_tx(&self, k: &IKey) -> Result<Tx, Error> {
         let attr: TxAttr = self.attr(k)?;
         let blk = self.get(&attr.blk.as_ref().into())?;
-        if attr.idx >= blk.txs.len() as u16 {
-            return Error::msg("idx outbound block txs len");
-        }
-        Ok(blk.txs[attr.idx as usize].clone())
+        let tx = blk.get_tx(attr.idx as usize)?;
+        Ok(tx.clone())
+    }
+    /// 从属性加载区块信息
+    pub fn load(&self, attr: &BlkAttr) -> Result<Arc<Block>, Error> {
+        self.do_write(|v| v.load(attr))
     }
     /// 获取区块信息
     /// k可以是高度或者id
@@ -807,7 +849,7 @@ fn test_indexer_thread() {
             thread::spawn(move || {
                 let iv = b;
                 let b1 = conf
-                    .create_block(Hasher::zero(), iv, "", |blk| {
+                    .create_block(Hasher::zero(), iv, conf.pow_limit.compact(), "", |blk| {
                         let best = idx.best().unwrap();
                         blk.header.prev = best.id;
                     })
@@ -829,7 +871,7 @@ fn test_simple_link_pop() {
         assert_eq!(0, best.height);
         for i in 0u32..=10 {
             let b1 = conf
-                .create_block(Hasher::zero(), i + 1, "", |blk| {
+                .create_block(Hasher::zero(), i + 1, conf.pow_limit.compact(), "", |blk| {
                     let best = idx.best().unwrap();
                     blk.header.prev = best.id;
                 })

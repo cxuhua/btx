@@ -41,9 +41,9 @@ impl Config {
         return n;
     }
     /// 创建一个默认配置的区块
-    pub fn new_block(&self, p: Hasher) -> Result<Block, Error> {
+    pub fn new_block(&self, p: Hasher, bits: u32) -> Result<Block, Error> {
         let mut blk = Block::default();
-        blk.header.bits = self.pow_limit.compact();
+        blk.header.bits = bits;
         blk.header.nonce = util::rand_u32();
         blk.header.set_now_time();
         blk.header.set_ver(self.ver);
@@ -75,7 +75,14 @@ impl Config {
     /// h 区块高度
     /// s coinbase信息
     /// v 奖励金额
-    pub fn create_block<F>(&self, p: Hasher, h: u32, s: &str, ff: F) -> Result<Block, Error>
+    pub fn create_block<F>(
+        &self,
+        p: Hasher,
+        h: u32,
+        bits: u32,
+        cbstr: &str,
+        ff: F,
+    ) -> Result<Block, Error>
     where
         F: FnOnce(&mut Block),
     {
@@ -83,9 +90,9 @@ impl Config {
             return Error::msg("acc option miss");
         }
         let acc = self.acc.as_ref().unwrap();
-        let mut blk = self.new_block(p)?;
+        let mut blk = self.new_block(p, bits)?;
         //创建coinbase交易
-        let cb = self.new_coinbase(h, s, &acc)?;
+        let cb = self.new_coinbase(h, cbstr, &acc)?;
         blk.append(cb);
         //完成区块时的而外工作
         ff(&mut blk);
@@ -129,12 +136,18 @@ impl Config {
         };
         //创建第一个区块
         let blk = conf
-            .create_block(Hasher::zero(), 0, "genesis test block", |_| {})
+            .create_block(
+                Hasher::zero(),
+                0,
+                conf.pow_limit.compact(),
+                "genesis test block",
+                |_| {},
+            )
             .unwrap();
         conf.genesis = blk.id().unwrap();
         //打开数据库
         let idx = Chain::new(&conf).unwrap();
-        //链接第一个区块
+        //链接第一个genesis区块
         idx.link(&blk).unwrap();
         tf(&conf, idx);
     }

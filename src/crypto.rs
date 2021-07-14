@@ -4,22 +4,25 @@ use crate::errors;
 use crate::hasher::Hasher;
 use core::{fmt, str};
 use secp256k1::rand::rngs::OsRng;
-use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signature};
+use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, SignOnly, Signature, VerifyOnly};
+
+lazy_static! {
+    static ref VO: Secp256k1<VerifyOnly> = Secp256k1::verification_only();
+    static ref SO: Secp256k1<SignOnly> = Secp256k1::signing_only();
+}
 
 //验证
-fn verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
-    let ctx = Secp256k1::verification_only();
+fn secp256k1_verify(msg: &[u8], sig: &SigValue, pubkey: &PublicKey) -> Result<bool, Error> {
     let uv = Hasher::hash(msg);
     let msg = Message::from_slice(uv.as_bytes())?;
-    Ok(ctx.verify(&msg, &sig.inner, &pubkey).is_ok())
+    Ok(VO.verify(&msg, &sig.inner, &pubkey).is_ok())
 }
 
 //签名
-fn sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
-    let ctx = Secp256k1::signing_only();
+fn secp256k1_sign(msg: &[u8], seckey: &SecretKey) -> Result<Signature, Error> {
     let uv = Hasher::hash(msg);
     let msg = Message::from_slice(uv.as_bytes())?;
-    Ok(ctx.sign(&msg, seckey))
+    Ok(SO.sign(&msg, seckey))
 }
 
 ///签名结果
@@ -126,7 +129,7 @@ use bech32::{FromBase32, ToBase32, Variant};
 impl PubKey {
     ///验证签名数据
     pub fn verify(&self, msg: &[u8], sig: &SigValue) -> Result<bool, Error> {
-        verify(msg, sig, &self.inner)
+        secp256k1_verify(msg, sig, &self.inner)
     }
     /// 编码公钥
     /// pk 开头的为公钥id
@@ -178,7 +181,7 @@ impl Clone for PriKey {
 impl PriKey {
     ///签名指定的数据
     pub fn sign(&self, msg: &[u8]) -> Result<SigValue, Error> {
-        match sign(msg, &self.inner) {
+        match secp256k1_sign(msg, &self.inner) {
             Ok(sig) => Ok(SigValue { inner: sig }),
             Err(err) => Err(err),
         }
