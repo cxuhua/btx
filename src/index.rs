@@ -260,7 +260,7 @@ fn test_block_index_coin_save() {
         assert_eq!(coins[0].base, 1);
         assert_eq!(coins[0].height, 0);
         //链接一个新的区块
-        let blk = idx.new_block("secode", |_| {}).unwrap();
+        let blk = idx.new_block("second", |_| {}).unwrap();
         let best = idx.link(&blk).unwrap();
         assert_eq!(best.height, 1);
         let coins = idx.coins(&acc).unwrap();
@@ -281,6 +281,7 @@ fn test_block_index_coin_save() {
         assert_eq!(coins[0].value, consts::coin(50));
         assert_eq!(coins[0].base, 1);
         assert_eq!(coins[0].height, 0);
+        assert_eq!(idx.pop().is_err(), true);
     });
 }
 
@@ -379,8 +380,8 @@ impl BlkIndexer {
         Ok(BlkIndexer {
             cache: BlkCache::default(),
             leveldb: LevelDB::open(Path::new(&index))?,
-            blk: Store::new(dir, "blk", Self::MAX_FILE_SIZE)?,
-            rev: Store::new(dir, "rev", Self::MAX_FILE_SIZE)?,
+            blk: Store::new(&block, "blk", Self::MAX_FILE_SIZE)?,
+            rev: Store::new(&block, "rev", Self::MAX_FILE_SIZE)?,
             conf: conf.clone(),
         })
     }
