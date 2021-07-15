@@ -16,10 +16,152 @@ use core::hash;
 use db_key::Key;
 use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
+use std::collections::btree_map;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::{Into, TryInto};
+use std::iter::Rev;
 use std::path::Path;
+use std::rc::Rc;
+use std::slice;
 use std::sync::Arc;
 use std::sync::RwLock;
+
+/// 交易池,存储将要进入区块的有效交易
+pub struct TxPool {
+    byid: HashMap<IKey, Rc<Tx>>,       //按交易id存储
+    byfee: BTreeMap<i64, Vec<Rc<Tx>>>, //按交易金额排序
+}
+
+impl Default for TxPool {
+    fn default() -> Self {
+        TxPool {
+            byid: HashMap::<IKey, Rc<Tx>>::default(),
+            byfee: BTreeMap::<i64, Vec<Rc<Tx>>>::default(),
+        }
+    }
+}
+
+/// 交易池按价格迭代器
+pub struct TxPoolIter<'a> {
+    pool: &'a TxPool,
+    rev: Rev<btree_map::Iter<'a, i64, Vec<Rc<Tx>>>>,
+    iter: Option<slice::Iter<'a, Rc<Tx>>>,
+}
+
+impl<'a> Iterator for TxPoolIter<'a> {
+    type Item = Rc<Tx>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.iter {
+            Some(ref mut iter) => match iter.next() {
+                Some(next) => {
+                    return Some(next.clone());
+                }
+                None => {
+                    self.iter = None;
+                    return self.next();
+                }
+            },
+            None => match self.rev.next() {
+                Some(v) => {
+                    self.iter = Some(v.1.iter());
+                    return self.next();
+                }
+                None => {
+                    return None;
+                }
+            },
+        }
+    }
+}
+
+impl TxPool {
+    /// 交易池按交易费从大到小获取
+    pub fn iter<'a>(&'a mut self) -> TxPoolIter<'a> {
+        TxPoolIter {
+            pool: self,
+            rev: self.byfee.iter().rev(),
+            iter: None,
+        }
+    }
+    /// 添加交易,添加前需要检测是否合法
+    /// fee要先计算出来
+    pub fn push(&mut self, tx: &Tx, fee: i64) -> Result<(), Error> {
+        let ref key: IKey = tx.id()?.as_ref().into();
+        //交易是否已经存在
+        if self.byid.contains_key(key) {
+            return Error::msg("tx exists");
+        }
+        let rtx = Rc::new(tx.clone());
+        self.byid.insert(key.clone(), rtx.clone());
+        //如果已经存在追加到数组中
+        match self.byfee.get_mut(&fee) {
+            Some(ref mut fees) => {
+                fees.push(rtx.clone());
+            }
+            None => {
+                self.byfee.insert(fee, vec![rtx.clone()]);
+            }
+        }
+        Ok(())
+    }
+    /// 按交易id移除
+    pub fn remove(&mut self, id: &Hasher) -> Result<(), Error> {
+        let ref key: IKey = id.as_ref().into();
+        if self.byid.remove(key).is_none() {
+            return Ok(());
+        }
+        for vs in self.byfee.iter_mut() {
+            for (i, tx) in vs.1.iter_mut().enumerate() {
+                if &tx.id()? == id {
+                    vs.1.remove(i);
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+    /// 获取交易池长度
+    pub fn len(&self) -> usize {
+        self.byid.len()
+    }
+}
+
+#[test]
+fn test_tx_pool_remove() {
+    let mut p = TxPool::default();
+    let mut tx1 = Tx::default();
+    tx1.ver = 100;
+    p.push(&tx1, 100).unwrap();
+    assert_eq!(p.len(), 1);
+    p.remove(&tx1.id().unwrap()).unwrap();
+    assert_eq!(p.len(), 0);
+}
+
+#[test]
+fn test_tx_pool_seq() {
+    let mut p = TxPool::default();
+    for i in 0..50 {
+        let mut tx1 = Tx::default();
+        tx1.ver = i as u32;
+        p.push(&tx1, i as i64).unwrap();
+    }
+    assert_eq!(p.len(), 50);
+    let mut i = 49;
+    for tx in p.iter() {
+        assert_eq!(i as u32, tx.ver);
+        i -= 1;
+    }
+    for i in 1..=50 {
+        let mut tx1 = Tx::default();
+        tx1.ver = i * 1000 as u32;
+        p.push(&tx1, 1000).unwrap();
+    }
+    let ks1 = p.byfee.get(&1000).unwrap();
+    assert_eq!(50, ks1.len());
+    for tx in ks1.iter() {
+        assert_eq!(tx.ver >= 1000, true);
+    }
+}
 
 #[derive(PartialEq, Eq, Clone, PartialOrd, Ord, Debug)]
 pub struct IKey(Vec<u8>);
@@ -292,6 +434,7 @@ pub struct BlkIndexer {
     blk: Store,       //区块存储
     rev: Store,       //回退日志存储
     conf: Config,     //配置信息
+                      //交易内存池,获取到的新交易存在,按交易费从高到低存放
 }
 
 /// 签名验证数据缓存
@@ -371,17 +514,20 @@ impl BlkIndexer {
     const BEST_KEY: &'static str = "__best__key__";
     /// 创建区块索引存储对象
     fn new(conf: &Config) -> Result<Self, Error> {
+        //根目录
         let dir = &conf.dir;
-        util::miss_create_dir(&dir)?;
-        let index = String::from(dir) + "/index";
-        util::miss_create_dir(&index)?;
-        let block = String::from(dir) + "/block";
-        util::miss_create_dir(&block)?;
+        util::miss_create_dir(dir)?;
+        //索引目录
+        let idxdir = String::from(dir) + "/index";
+        util::miss_create_dir(&idxdir)?;
+        //区块目录
+        let blkdir = String::from(dir) + "/block";
+        util::miss_create_dir(&blkdir)?;
         Ok(BlkIndexer {
             cache: BlkCache::default(),
-            leveldb: LevelDB::open(Path::new(&index))?,
-            blk: Store::new(&block, "blk", Self::MAX_FILE_SIZE)?,
-            rev: Store::new(&block, "rev", Self::MAX_FILE_SIZE)?,
+            leveldb: LevelDB::open(Path::new(&idxdir))?,
+            blk: Store::new(&blkdir, "blk", Self::MAX_FILE_SIZE)?,
+            rev: Store::new(&blkdir, "rev", Self::MAX_FILE_SIZE)?,
             conf: conf.clone(),
         })
     }
@@ -499,47 +645,51 @@ impl BlkIndexer {
         //加入缓存并返回
         self.cache.put(k, &blk)
     }
+    /// 获取交易费用
+    pub fn get_tx_transaction_fee(&mut self, tx: &Tx) -> Result<i64, Error> {
+        let (mut ofee, mut ifee, mut tfee) = (0, 0, 0);
+        //coinbase没有交易费
+        if tx.is_coinbase() {
+            return Ok(0);
+        }
+        for inv in tx.ins.iter() {
+            //获取引用的输入金额
+            let outv = self.get_txin_ref_txout(&inv)?;
+            ifee += outv.value;
+        }
+        for outv in tx.outs.iter() {
+            ofee += outv.value;
+        }
+        if !consts::is_valid_amount(ifee) || !consts::is_valid_amount(ofee) {
+            return Error::msg("ifee or ofee error");
+        }
+        if ofee > ifee {
+            return Error::msg("tx out fee > tx input fee");
+        }
+        //累加交易费
+        tfee += ifee - ofee;
+        if !consts::is_valid_amount(tfee) {
+            return Error::msg("tfee error");
+        }
+        Ok(tfee)
+    }
     /// 获取区块交易费,不检测区块有效性,引用的coin可能已经被消费了,只计算金额
     pub fn get_block_transaction_fee(&mut self, blk: &Block) -> Result<i64, Error> {
-        let (mut ofee, mut ifee, mut tfee) = (0, 0, 0);
+        let mut tfee = 0;
         for tx in blk.txs.iter() {
-            //coinbase不包含有效的交易费
-            if tx.is_coinbase() {
-                continue;
-            }
-            for inv in tx.ins.iter() {
-                //获取引用的输入金额
-                let outv = self.get_txin_ref_txout(&inv)?;
-                ifee += outv.value;
-            }
-            for outv in tx.outs.iter() {
-                ofee += outv.value;
-            }
-            if !consts::is_valid_amount(ifee) || !consts::is_valid_amount(ofee) {
-                return Error::msg("ifee or ofee error");
-            }
-            if ofee > ifee {
-                return Error::msg("tx out fee > tx input fee");
-            }
-            //累加交易费
-            tfee += ifee - ofee;
-            if !consts::is_valid_amount(tfee) {
-                return Error::msg("tfee error");
-            }
-            ifee = 0;
-            ofee = 0;
+            tfee += self.get_tx_transaction_fee(&tx)?;
         }
         Ok(tfee)
     }
     /// 检测区块的金额
     /// 这个检测的区块是新连入的区块,需要检测引用的coin是否在链中
     /// 并且检测签名是否正确
-    fn check_block_amount(&mut self, next: u32, blk: &Block) -> Result<(), Error> {
+    fn check_block_amount(&mut self, height: u32, blk: &Block) -> Result<(), Error> {
         //coinbase输出，输入, 输出, 交易费, 区块奖励
         //1.每个交易的输出<=输入,差值就是交易费用，可包含在coinbase输出中
         //3.coinbase输出 <= (区块奖励+交易费)
         let (mut cfee, mut ofee, mut ifee, mut tfee, rfee) =
-            (0, 0, 0, 0, self.conf.compute_reward(next));
+            (0, 0, 0, 0, self.conf.compute_reward(height));
         if !consts::is_valid_amount(rfee) {
             return Error::msg("rfee  error");
         }
@@ -570,7 +720,7 @@ impl BlkIndexer {
                     return Error::msg("out value != coin value");
                 }
                 //金额是否成熟
-                if !coin.is_matured(next) {
+                if !coin.is_matured(height) {
                     return Error::msg("coin not matured");
                 }
                 //消耗

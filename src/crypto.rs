@@ -150,15 +150,6 @@ pub fn bech32_decode(s: &str) -> Result<(String, Vec<u8>), bech32::Error> {
     Ok((String::from(hrp), vdata))
 }
 
-#[test]
-fn test_pubkyeid() {
-    let kv = PriKey::new();
-    let pv = kv.pubkey();
-    let id = pv.encode().unwrap();
-    println!("{}", id);
-    println!("{:?}", bech32_decode(&id).unwrap());
-}
-
 impl PubKey {
     /// 将公钥再次hash用来生成账户地址
     pub fn hash(&self) -> Hasher {
@@ -245,6 +236,15 @@ impl PriKey {
 }
 
 #[test]
+fn test_pubkey_serialize() {
+    use crate::iobuf::Writer;
+    let mut wb = Writer::default();
+    let pk = PriKey::new();
+    wb.put(&pk.pubkey());
+    assert_eq!(wb.len(), 34);
+}
+
+#[test]
 fn test_iobuf() {
     use crate::iobuf::Writer;
     let mut wb = Writer::default();
@@ -259,8 +259,6 @@ fn test_signer() {
     let kv = PriKey::new();
     let pv = kv.pubkey();
     let signature = kv.sign("adfs".as_bytes()).unwrap();
-    println!("{:x?}", signature.into_bytes());
-    println!("{}", signature);
     assert!(!pv.verify("adfs1".as_bytes(), &signature).unwrap());
     assert!(pv.verify("adfs".as_bytes(), &signature).unwrap());
 }

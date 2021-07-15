@@ -9,7 +9,7 @@ use crate::util;
 use std::convert::TryInto;
 use tempdir::TempDir;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// 数据文件目录
     pub dir: String,
