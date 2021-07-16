@@ -369,6 +369,7 @@ impl Account {
         wb.u8(self.num);
         wb.u8(self.less);
         wb.u8(self.arb);
+        wb.u8(self.pubs_size() as u8);
         for pb in self
             .pubs
             .iter()
@@ -545,7 +546,7 @@ fn test_account_encode_sign() {
     let wb = &mut Writer::default();
     let acc = Account::new(5, 2, false, true).unwrap();
     acc.encode_sign(wb).unwrap();
-    assert_eq!(3 + 33 * 5, wb.bytes().len());
+    assert_eq!(3 + 1 + 33 * 5, wb.bytes().len());
 }
 
 #[test]

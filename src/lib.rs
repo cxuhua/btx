@@ -18,3 +18,10 @@ pub mod util;
 
 #[macro_use]
 extern crate lazy_static;
+
+/// 模块初始化
+pub fn init() {
+    env_logger::builder()
+        .filter(Some("btx"), log::LevelFilter::Trace)
+        .init();
+}
