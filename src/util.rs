@@ -96,20 +96,3 @@ fn test_time_now() {
     let x = from_timestamp(30);
     assert_eq!(x, y);
 }
-
-#[test]
-fn test_log_use() {
-    struct Logger;
-    impl log::Log for Logger {
-        fn enabled(&self, _: &log::Metadata) -> bool {
-            false
-        }
-        fn log(&self, record: &log::Record) {
-            println!("{:?}", record);
-        }
-        fn flush(&self) {}
-    }
-    log::set_boxed_logger(Box::new(Logger)).unwrap();
-    log::set_max_level(log::LevelFilter::Trace);
-    log::info!("aaa{},{}", 111, 222);
-}

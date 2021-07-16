@@ -124,6 +124,29 @@ impl TxPool {
     pub fn len(&self) -> usize {
         self.byid.len()
     }
+    /// 获取金额信息
+    /// acc: 账户hash id
+    /// tx:交易hash id
+    /// idx:输出未知
+    pub fn get_coin(&self, acc: &Hasher, id: &Hasher, idx: u16) -> Result<CoinAttr, Error> {
+        let ref key: IKey = id.as_ref().into();
+        let tx = self
+            .byid
+            .get(key)
+            .map_or(Error::msg("tx miss"), |v| Ok(v))?;
+        let outv = tx.get_out(idx as usize)?;
+        if &outv.get_address()? != acc {
+            return Error::msg("acc outv miss");
+        }
+        let mut coin = CoinAttr::default();
+        coin.cpk = acc.clone();
+        coin.tx = id.clone();
+        coin.idx = idx;
+        coin.value = outv.value;
+        coin.flags = COIN_ATTR_FLAGS_TXPOOL;
+        coin.height = u32::MAX; //内存池交易不存在高度
+        Ok(coin)
+    }
 }
 
 #[test]
@@ -250,6 +273,11 @@ impl IKey {
     }
 }
 
+/// 是否来自coinbase交易
+const COIN_ATTR_FLAGS_COINBASE: u8 = 1 << 0;
+/// 是否来自交易池
+const COIN_ATTR_FLAGS_TXPOOL: u8 = 1 << 1;
+
 /// 金额数据结构
 /// 地址对应的金额将存储在key方法返回的key中
 /// cpk tx idx 使用存储key去填充
@@ -259,7 +287,7 @@ pub struct CoinAttr {
     tx: Hasher,  //所在交易
     idx: u16,    //所在交易的输出
     value: i64,  //金额
-    base: u8,    //是否在coinbase交易
+    flags: u8,   //是否在coinbase交易
     height: u32, //所在区块高度
 }
 
@@ -274,7 +302,7 @@ impl Serializer for CoinAttr {
     /// 编码数据到writer
     fn encode(&self, w: &mut Writer) {
         w.i64(self.value);
-        w.u8(self.base);
+        w.u8(self.flags);
         w.u32(self.height);
     }
     /// 从reader读取数据
@@ -284,7 +312,7 @@ impl Serializer for CoinAttr {
     {
         let mut coin = Self::default();
         coin.value = r.i64()?;
-        coin.base = r.u8()?;
+        coin.flags = r.u8()?;
         coin.height = r.u32()?;
         Ok(coin)
     }
@@ -297,7 +325,7 @@ impl Default for CoinAttr {
             tx: Hasher::zero(),
             idx: 0,
             value: 0,
-            base: 0,
+            flags: 0,
             height: 0,
         }
     }
@@ -316,14 +344,22 @@ impl HasKey for CoinAttr {
 }
 
 impl CoinAttr {
+    /// 是否来自交易池
+    pub fn is_txpool(&self) -> bool {
+        self.flags & COIN_ATTR_FLAGS_TXPOOL == 1
+    }
     /// 是否来自coinbase交易
     pub fn is_coinbase(&self) -> bool {
-        self.base & 0b1 == 1
+        self.flags & COIN_ATTR_FLAGS_COINBASE == 1
     }
     /// 金额在spent高度上是否可用
     pub fn is_matured(&self, spent: u32) -> bool {
+        //来自交易池不可用
+        if self.is_txpool() {
+            return false;
+        }
         //非coinbase可用
-        if self.base == 0 {
+        if !self.is_coinbase() {
             return true;
         }
         //coinbase输出必须在100个高度后才可消费
@@ -349,7 +385,7 @@ impl CoinAttr {
     /// 填充值
     pub fn fill_value_with_reader(&mut self, r: &mut Reader) -> Result<&mut Self, Error> {
         self.value = r.i64()?;
-        self.base = r.u8()?;
+        self.flags = r.u8()?;
         self.height = r.u32()?;
         Ok(self)
     }
@@ -375,7 +411,7 @@ fn test_coin_attr_key_value() {
         .unwrap();
     attr.idx = 0x9988;
     attr.value = 78965;
-    attr.base = 1;
+    attr.flags = 1;
     attr.height = 2678;
     let value = attr.value();
     let mut attr2 = CoinAttr::from_key(&attr.key()).unwrap();
@@ -384,7 +420,7 @@ fn test_coin_attr_key_value() {
     assert_eq!(attr.tx, attr2.tx);
     assert_eq!(attr.idx, attr2.idx);
     assert_eq!(attr.value, attr2.value);
-    assert_eq!(attr.base, attr2.base);
+    assert_eq!(attr.flags, attr2.flags);
     assert_eq!(attr.height, attr2.height);
 }
 
@@ -399,7 +435,7 @@ fn test_block_index_coin_save() {
         assert_eq!(1, coins.len());
         assert_eq!(coins[0].cpk, acc.hash().unwrap());
         assert_eq!(coins[0].value, consts::coin(50));
-        assert_eq!(coins[0].base, 1);
+        assert_eq!(coins[0].flags, 1);
         assert_eq!(coins[0].height, 0);
         //链接一个新的区块
         let blk = idx.new_block("second", |_| {}).unwrap();
@@ -410,7 +446,7 @@ fn test_block_index_coin_save() {
         assert_eq!(coins[0].height, 0);
         assert_eq!(coins[1].cpk, acc.hash().unwrap());
         assert_eq!(coins[1].value, consts::coin(50));
-        assert_eq!(coins[1].base, 1);
+        assert_eq!(coins[1].flags, 1);
         assert_eq!(coins[1].height, 1);
         let pop = idx.pop().unwrap();
         assert_eq!(pop.id().unwrap(), blk.id().unwrap());
@@ -421,7 +457,7 @@ fn test_block_index_coin_save() {
         assert_eq!(1, coins.len());
         assert_eq!(coins[0].cpk, acc.hash().unwrap());
         assert_eq!(coins[0].value, consts::coin(50));
-        assert_eq!(coins[0].base, 1);
+        assert_eq!(coins[0].flags, 1);
         assert_eq!(coins[0].height, 0);
         assert_eq!(idx.pop().is_err(), true);
     });
@@ -902,7 +938,7 @@ impl BlkIndexer {
         coin.idx = inv.idx;
         coin.value = outv.value;
         if tx.is_coinbase() {
-            coin.base = 1;
+            coin.flags = COIN_ATTR_FLAGS_COINBASE;
         }
         coin.height = blk.hhv;
         Ok(coin)
@@ -929,9 +965,9 @@ impl BlkIndexer {
         best: &Best,        //当前生成区块的高度
         tx: &Tx,            //当前区块交易
     ) -> Result<(), Error> {
-        let mut base: u8 = 0;
+        let mut flags: u8 = 0;
         if tx.is_coinbase() {
-            base = 1;
+            flags = COIN_ATTR_FLAGS_COINBASE;
         }
         //输入对应消耗金额
         for inv in tx.ins.iter() {
@@ -955,7 +991,7 @@ impl BlkIndexer {
             coin.tx = tx.id()?;
             coin.idx = i as u16;
             coin.value = outv.value;
-            coin.base = base;
+            coin.flags = flags;
             coin.height = best.height;
             batch.put_attr(&coin);
         }
