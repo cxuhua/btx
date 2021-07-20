@@ -34,19 +34,19 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[test]
-fn test_error_fmt() {
-    fn ff() -> Result<(), Error> {
-        Error::fmt(format_args!("{} foo {:?}", 1, 2))
-    }
-    assert_eq!(ff(), Err(Error("1 foo 2".into())));
+// #[test]
+// fn test_error_fmt() {
+//     fn ff() -> Result<(), Error> {
+//         Error::fmt(format_args!("{} foo {:?}", 1, 2))
+//     }
+//     assert_eq!(ff(), Err(Error("1 foo 2".into())));
 
-    env_logger::builder()
-        .filter(Some("btx"), log::LevelFilter::Trace)
-        .init();
-    log::trace!("--trace");
-    log::debug!("--debug");
-    log::info!("--info");
-    log::warn!("--warn");
-    log::error!("--error");
-}
+//     env_logger::builder()
+//         .filter(Some("btx"), log::LevelFilter::Trace)
+//         .init();
+//     log::trace!("--trace");
+//     log::debug!("--debug");
+//     log::info!("--info");
+//     log::warn!("--warn");
+//     log::error!("--error");
+// }
