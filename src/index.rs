@@ -1,4 +1,4 @@
-use crate::account::{Account, HasAddress};
+use crate::account::{Account, AccountPool, HasAddress};
 use crate::block::{Best, BlkAttr, Block, Checker, Tx, TxAttr, TxIn, TxOut};
 use crate::bytes::IntoBytes;
 use crate::config::Config;
@@ -8,7 +8,7 @@ use crate::hasher::Hasher;
 use crate::iobuf::Writer;
 use crate::iobuf::{Reader, Serializer};
 use crate::leveldb::{IBatch, LevelDB};
-use crate::script::{Ele, Exector, ExectorEnv};
+use crate::script::{Ele, Exector, ExectorEnv, Script};
 use crate::store::Store;
 use crate::util;
 use bytes::BufMut;
@@ -18,12 +18,120 @@ use lru::LruCache;
 use std::cmp::{Eq, PartialEq};
 use std::collections::btree_map;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::{Into, TryInto};
+use std::convert::{Into, TryFrom, TryInto};
 use std::iter::Rev;
 use std::path::Path;
 use std::slice;
 use std::sync::Arc;
 use std::sync::RwLock;
+
+/// 交易助手输出元素
+#[derive(Debug, Clone)]
+pub struct TxOutEle {
+    value: i64,  //输出金额
+    acc: Hasher, //输出地址hash
+}
+
+/// 交易助手
+/// 生成交易信息
+pub struct TxHelper<'a> {
+    coins: Vec<CoinAttr>, //使用的金额作为输入信息
+    outs: Vec<TxOutEle>,  //输出金额
+    tfee: i64,            //交易费
+    ctx: &'a Chain,       //链对象
+    keep: Option<Hasher>, //找零账户
+}
+
+impl<'a> TryFrom<&TxHelper<'a>> for Tx {
+    type Error = Error;
+    fn try_from(value: &TxHelper<'a>) -> Result<Self, Self::Error> {
+        if !consts::is_valid_amount(value.tfee) {
+            return Error::msg("tfee error");
+        }
+        let mut keep: Option<Hasher> = value.keep.clone();
+        let (mut ifee, mut ofee) = (0, 0);
+        let mut tx = Tx::default();
+        tx.ver = 1;
+        for coin in value.coins.iter() {
+            //金额对应的账户信息,如果没有将不能消费这个金额
+            let acc = value.ctx.account(&coin.cpk)?;
+            let mut inv = TxIn::default();
+            inv.out = coin.tx.clone();
+            inv.idx = coin.idx;
+            inv.script = Script::new_script_in(&acc)?;
+            inv.seq = 0;
+            tx.ins.push(inv);
+            ifee += coin.value;
+            //如果未设置找零输出账户使用最后一个
+            if value.keep.is_none() {
+                keep = Some(acc.get_address()?);
+            }
+        }
+        for ele in value.outs.iter() {
+            if ele.value == 0 {
+                continue;
+            }
+            let mut outv = TxOut::default();
+            outv.value = ele.value;
+            outv.script = Script::new_script_out(&ele.acc)?;
+            tx.outs.push(outv);
+            ofee += ele.value
+        }
+        if !consts::is_valid_amount(ofee) || !consts::is_valid_amount(ifee) {
+            return Error::msg("fee error");
+        }
+        if ofee > ifee {
+            return Error::msg("ofee > ifee error");
+        }
+        //剩余的金额转到找零对象
+        let kfee = ifee - ofee - value.tfee;
+        if !consts::is_valid_amount(kfee) {
+            return Error::msg("kfee error");
+        }
+        if kfee > 0 && keep.is_none() {
+            return Error::msg("keep account miss");
+        }
+        if kfee > 0 {
+            let mut outk = TxOut::default();
+            outk.value = kfee;
+            outk.script = Script::new_script_out(&keep.unwrap())?;
+            tx.outs.push(outk);
+        }
+        Ok(tx)
+    }
+}
+
+impl<'a> TxHelper<'a> {
+    /// 设置找零账户hasher
+    pub fn set_keep(&mut self, keep: &Hasher) -> &mut Self {
+        self.keep = Some(keep.clone());
+        self
+    }
+    /// 设置交易费
+    pub fn set_cost_fee(&mut self, fee: i64) -> &mut Self {
+        self.tfee = fee;
+        self
+    }
+    /// 设置输出
+    pub fn set_outs(&mut self, eles: &Vec<TxOutEle>) -> &mut Self {
+        self.outs = eles.clone();
+        self
+    }
+    /// 设置使用的金额
+    pub fn set_coins(&mut self, coins: &Vec<CoinAttr>) -> &mut Self {
+        self.coins = coins.clone();
+        self
+    }
+    pub fn new(ctx: &'a Chain) -> Self {
+        TxHelper {
+            coins: vec![],
+            outs: vec![],
+            tfee: 0,
+            ctx: ctx,
+            keep: None,
+        }
+    }
+}
 
 /// 交易池,存储将要进入区块的有效交易
 pub struct TxPool {
@@ -84,8 +192,13 @@ impl TxPool {
     }
     /// 检测交易是否可进行交易池
     fn check_value(&self, tx: &Tx) -> Result<(), Error> {
+        //必须有输入和输出
         if tx.ins.len() == 0 || tx.outs.len() == 0 {
-            return Error::msg("inc or outs empy");
+            return Error::msg("ins or outs empy");
+        }
+        //交易池中不应该有coinbase交易
+        if tx.is_coinbase() {
+            return Error::msg("txpool don't have coinbase tx");
         }
         let ref key: IKey = tx.id()?.as_ref().into();
         //交易是否已经存在
@@ -93,10 +206,6 @@ impl TxPool {
             return Error::msg("tx exists");
         }
         for inv in tx.ins.iter() {
-            //coinbase没有引用的交易
-            if inv.is_coinbase() {
-                continue;
-            }
             //引用的交易已经存在交易池中消耗
             if self.is_cost_coin(&inv.out, inv.idx) {
                 return Error::msg("ref out is cost");
@@ -213,91 +322,6 @@ impl TxPool {
         coin.flags = COIN_ATTR_FLAGS_TXPOOL;
         coin.height = u32::MAX; //内存池交易不存在高度
         Ok(coin)
-    }
-}
-
-#[test]
-fn test_txpool_coin() {
-    let acc = Account::new(1, 1, false, true).unwrap();
-    use crate::script::Script;
-    let mut cb = Tx::default();
-    cb.ver = 1;
-    //交易输入
-    let mut inv = TxIn::default();
-    inv.out = Hasher::zero();
-    inv.idx = 0;
-    inv.script = Script::new_script_cb(0, "test coinbase".as_bytes()).unwrap();
-    inv.seq = 0;
-    cb.ins.push(inv);
-    //交易输出
-    let mut out = TxOut::default();
-    out.value = 12345;
-    out.script = Script::new_script_out(&acc.hash().unwrap()).unwrap();
-    cb.outs.push(out);
-
-    let mut p = TxPool::default();
-    p.push(&cb, 100).unwrap();
-    let coins = p.coins(&acc).unwrap();
-    assert_eq!(coins.len(), 1);
-    assert_eq!(coins[0].cpk, acc.hash().unwrap());
-    assert_eq!(coins[0].is_txpool(), true);
-    assert_eq!(coins[0].value, 12345 as i64);
-}
-
-/// 创建测试用coinbase迥异
-fn new_test_coinbase_tx() -> Result<Tx, Error> {
-    let acc = Account::new(1, 1, false, true)?;
-    use crate::script::Script;
-    let mut cb = Tx::default();
-    cb.ver = 1;
-    //交易输入
-    let mut inv = TxIn::default();
-    inv.out = Hasher::zero();
-    inv.idx = 0;
-    inv.script = Script::new_script_cb(0, "test coinbase".as_bytes())?;
-    inv.seq = 0;
-    cb.ins.push(inv);
-    //交易输出
-    let mut out = TxOut::default();
-    out.value = 12345;
-    out.script = Script::new_script_out(&acc.hash()?)?;
-    cb.outs.push(out);
-    Ok(cb)
-}
-
-#[test]
-fn test_tx_pool_remove() {
-    let cb = new_test_coinbase_tx().unwrap();
-    let mut p = TxPool::default();
-    p.push(&cb, 100).unwrap();
-    assert_eq!(p.len(), 1);
-    p.remove(&cb.id().unwrap()).unwrap();
-    assert_eq!(p.len(), 0);
-}
-
-#[test]
-fn test_tx_pool_seq() {
-    let mut p = TxPool::default();
-    for i in 0..50 {
-        let mut tx1 = new_test_coinbase_tx().unwrap();
-        tx1.ver = i as u32;
-        p.push(&tx1, i as i64).unwrap();
-    }
-    assert_eq!(p.len(), 50);
-    let mut i = 49;
-    for tx in p.iter() {
-        assert_eq!(i as u32, tx.ver);
-        i -= 1;
-    }
-    for i in 1..=50 {
-        let mut tx1 = new_test_coinbase_tx().unwrap();
-        tx1.ver = i * 1000 as u32;
-        p.push(&tx1, 1000).unwrap();
-    }
-    let ks1 = p.byfee.get(&1000).unwrap();
-    assert_eq!(50, ks1.len());
-    for tx in ks1.iter() {
-        assert_eq!(tx.ver >= 1000, true);
     }
 }
 
@@ -580,12 +604,13 @@ fn test_block_index_coin_save() {
 
 /// 区块链数据存储索引
 pub struct BlkIndexer {
-    cache: BlkCache,  //缓存
-    leveldb: LevelDB, //索引数据库指针
-    blk: Store,       //区块存储
-    rev: Store,       //回退日志存储
-    conf: Config,     //配置信息
-    pool: TxPool,     //交易内存池,获取到的新交易存在,按交易费从高到低存放
+    cache: BlkCache,                   //缓存
+    leveldb: LevelDB,                  //索引数据库指针
+    blk: Store,                        //区块存储
+    rev: Store,                        //回退日志存储
+    conf: Config,                      //配置信息
+    pool: TxPool,                      //交易内存池,获取到的新交易存在,按交易费从高到低存放
+    acp: Option<Box<dyn AccountPool>>, //账户池
 }
 
 /// 签名验证数据缓存
@@ -647,6 +672,11 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
+    /// 设置账户池对象
+    pub fn set_account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+        self.acp = Some(acp);
+        Ok(())
+    }
     /// 创建下个区块
     /// 保证第一个区块已经链接到链
     /// cbstr: coinbase区块自定义信息
@@ -681,6 +711,7 @@ impl BlkIndexer {
             rev: Store::new(&blkdir, "rev", Self::MAX_FILE_SIZE)?,
             conf: conf.clone(),
             pool: TxPool::default(),
+            acp: None,
         })
     }
     /// 添加交易到交易池
@@ -845,7 +876,7 @@ impl BlkIndexer {
         }
         Ok(tfee)
     }
-    /// 教测进入交易池的交易
+    /// 检测进入交易池的交易
     /// 返回tfee(交易费),cfee(coinbase输出)
     fn check_tx_amount(&mut self, height: u32, tx: &Tx) -> Result<(i64, i64), Error> {
         let (mut ofee, mut ifee, mut tfee, mut cfee) = (0, 0, 0, 0);
@@ -1172,6 +1203,21 @@ impl BlkIndexer {
 pub struct Chain(RwLock<BlkIndexer>);
 
 impl Chain {
+    /// 设置账户池
+    pub fn set_account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+        self.do_write(|v| v.set_account_pool(acp))
+    }
+    /// 创建交易助手
+    pub fn new_helper<'a>(&'a self) -> TxHelper<'a> {
+        TxHelper::new(self)
+    }
+    /// 根据账户地址获取账户信息
+    pub fn account(&self, id: &Hasher) -> Result<Account, Error> {
+        self.do_read(|v| match v.acp {
+            Some(ref acp) => acp.get_account(id),
+            None => Error::msg("account pool miss"),
+        })
+    }
     /// 从当前链顶创建一个新区块
     pub fn new_block<F>(&self, cbstr: &str, ff: F) -> Result<Block, Error>
     where
@@ -1248,19 +1294,6 @@ impl Chain {
     pub fn remove(&self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.do_write(|v| v.remove(id))
     }
-}
-
-#[test]
-fn test_index_append_tx() {
-    Config::test(|conf, idx| {
-        let tx = conf
-            .new_coinbase(1, "test".as_ref(), &conf.acc.as_ref().unwrap())
-            .unwrap();
-        idx.append(&tx).unwrap();
-        assert_eq!(idx.append(&tx).is_err(), true);
-        idx.remove(&tx.id().unwrap()).unwrap();
-        assert_eq!(idx.append(&tx).is_err(), false);
-    })
 }
 
 #[test]

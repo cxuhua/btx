@@ -5,11 +5,19 @@ use core::fmt;
 use hex::{FromHex, ToHex};
 use sha2::{Digest, Sha256};
 pub const SIZE: usize = 32;
+use crate::account::HasAddress;
 use num_bigint::BigUint;
 use num_traits::FromPrimitive;
 use std::cmp::Ordering;
 use std::convert::{From, TryFrom, TryInto};
 use std::ops::{Div, Mul};
+
+/// 编码地址
+impl HasAddress for Hasher {
+    fn get_address(&self) -> Result<Hasher, errors::Error> {
+        Ok(self.clone())
+    }
+}
 
 #[test]
 fn test_compact() {

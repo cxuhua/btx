@@ -9,7 +9,16 @@ use crate::util;
 use bech32::{FromBase32, ToBase32, Variant};
 use hex::{FromHex, ToHex};
 
+/// 账户管理器
+pub trait AccountPool: Sync + Send {
+    /// 获取指定的账户
+    fn get_account(&self, id: &Hasher) -> Result<Account, errors::Error>;
+    /// 列出所有账户
+    fn list_account(&self) -> Vec<&Account>;
+}
+
 /// 存在地址hasher可获取地址
+/// Account,TxIn,TxOut,Hasher
 pub trait HasAddress: Sized {
     /// 获取地址hasher
     fn get_address(&self) -> Result<Hasher, errors::Error>;
