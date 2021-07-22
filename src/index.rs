@@ -673,7 +673,7 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
     /// 设置账户池对象
-    pub fn set_account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+    pub fn account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
         self.acp = Some(acp);
         Ok(())
     }
@@ -1204,8 +1204,8 @@ pub struct Chain(RwLock<BlkIndexer>);
 
 impl Chain {
     /// 设置账户池
-    pub fn set_account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
-        self.do_write(|v| v.set_account_pool(acp))
+    pub fn account_pool(&self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+        self.do_write(|v| v.account_pool(acp))
     }
     /// 创建交易助手
     pub fn new_helper<'a>(&'a self) -> TxHelper<'a> {

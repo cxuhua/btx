@@ -112,6 +112,12 @@ impl Default for Hasher {
     }
 }
 
+impl From<&[u8]> for Hasher {
+    fn from(v: &[u8]) -> Self {
+        Hasher::with_bytes(v)
+    }
+}
+
 ///从大数获取
 impl From<&BigUint> for Hasher {
     fn from(v: &BigUint) -> Self {

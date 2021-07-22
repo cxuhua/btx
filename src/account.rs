@@ -14,7 +14,7 @@ pub trait AccountPool: Sync + Send {
     /// 获取指定的账户
     fn get_account(&self, id: &Hasher) -> Result<Account, errors::Error>;
     /// 列出所有账户
-    fn list_account(&self) -> Vec<&Account>;
+    fn list_keys(&self) -> Vec<Hasher>;
 }
 
 /// 存在地址hasher可获取地址

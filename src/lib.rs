@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod account;
+pub mod accpool;
 pub mod block;
 pub mod bytes;
 pub mod config;

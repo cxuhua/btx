@@ -1,4 +1,5 @@
 use crate::account::Account;
+use crate::accpool::AccTestPool;
 use crate::block::{Block, Tx, TxIn, TxOut};
 use crate::consts;
 use crate::errors::Error;
@@ -147,6 +148,8 @@ impl Config {
         conf.genesis = blk.id().unwrap();
         //打开数据库
         let idx = Chain::new(&conf).unwrap();
+        //设置账户管理器
+        idx.account_pool(AccTestPool::new()).unwrap();
         //链接第一个genesis区块
         idx.link(&blk).unwrap();
         tf(&conf, idx);
