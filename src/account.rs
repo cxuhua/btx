@@ -8,13 +8,16 @@ use crate::iobuf::{Reader, Writer};
 use crate::util;
 use bech32::{FromBase32, ToBase32, Variant};
 use hex::{FromHex, ToHex};
+use std::sync::Arc;
 
 /// 账户管理器
 pub trait AccountPool: Sync + Send {
     /// 获取指定的账户
-    fn get_account(&self, id: &Hasher) -> Result<Account, errors::Error>;
+    fn get_account(&self, id: &str) -> Result<Arc<Account>, errors::Error>;
     /// 列出所有账户
-    fn list_keys(&self) -> Vec<Hasher>;
+    fn list_keys(&self) -> Vec<String>;
+    /// 获取总数
+    fn len(&self) -> usize;
 }
 
 /// 存在地址hasher可获取地址

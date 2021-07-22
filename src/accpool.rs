@@ -1,41 +1,44 @@
 use crate::account::{Account, AccountPool};
 use crate::errors::Error;
 use crate::hasher::Hasher;
-use crate::index::IKey;
 use std::collections::HashMap;
 use std::convert::Into;
+use std::sync::Arc;
 /// 基于测试账户管理
 #[derive(Debug)]
 pub struct AccTestPool {
-    pool: HashMap<IKey, Account>,
+    pool: HashMap<String, Arc<Account>>,
 }
 
 impl AccTestPool {
     pub fn new() -> Box<dyn AccountPool> {
         let mut pool = AccTestPool {
-            pool: HashMap::<IKey, Account>::default(),
+            pool: HashMap::<String, Arc<Account>>::default(),
         };
         for _ in 0..3 {
             let acc = Account::new(1, 1, false, true).unwrap();
-            let id = acc.hash().unwrap();
-            pool.pool.insert(id.as_ref().into(), acc);
+            let addr = acc.encode().unwrap();
+            pool.pool.insert(addr, Arc::new(acc));
         }
         Box::new(pool)
     }
 }
 
 impl AccountPool for AccTestPool {
-    fn get_account(&self, id: &Hasher) -> Result<Account, Error> {
+    fn get_account(&self, id: &str) -> Result<Arc<Account>, Error> {
         self.pool
-            .get(&id.into())
+            .get(id.into())
             .map_or(Error::msg("not found"), |v| Ok(v.clone()))
     }
-    fn list_keys(&self) -> Vec<Hasher> {
-        let mut keys: Vec<Hasher> = vec![];
+    fn list_keys(&self) -> Vec<String> {
+        let mut keys = vec![];
         for (key, _) in self.pool.iter() {
-            keys.push(key.bytes().into());
+            keys.push(key.clone());
         }
         keys
+    }
+    fn len(&self) -> usize {
+        self.pool.len()
     }
 }
 

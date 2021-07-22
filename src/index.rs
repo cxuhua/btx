@@ -1212,9 +1212,9 @@ impl Chain {
         TxHelper::new(self)
     }
     /// 根据账户地址获取账户信息
-    pub fn account(&self, id: &Hasher) -> Result<Account, Error> {
+    pub fn account(&self, id: &Hasher) -> Result<Arc<Account>, Error> {
         self.do_read(|v| match v.acp {
-            Some(ref acp) => acp.get_account(id),
+            Some(ref acp) => acp.get_account(&id.string()?),
             None => Error::msg("account pool miss"),
         })
     }
