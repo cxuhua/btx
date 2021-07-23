@@ -29,17 +29,17 @@ use std::sync::RwLock;
 #[derive(Debug, Clone)]
 pub struct TxOutEle {
     value: i64,  //输出金额
-    acc: Hasher, //输出地址hash
+    acc: String, //输出地址
 }
 
 /// 交易助手
 /// 生成交易信息
 pub struct TxHelper<'a> {
-    coins: Vec<CoinAttr>, //使用的金额作为输入信息
-    outs: Vec<TxOutEle>,  //输出金额
-    tfee: i64,            //交易费
-    ctx: &'a Chain,       //链对象
-    keep: Option<Hasher>, //找零账户
+    coins: Vec<CoinAttr>,  //使用的金额作为输入信息
+    outs: Vec<TxOutEle>,   //输出金额
+    tfee: i64,             //交易费
+    ctx: &'a Chain,        //链对象
+    kaddr: Option<Hasher>, //找零地址
 }
 
 impl<'a> TryFrom<&TxHelper<'a>> for Tx {
@@ -48,7 +48,7 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
         if !consts::is_valid_amount(value.tfee) {
             return Error::msg("tfee error");
         }
-        let mut keep: Option<Hasher> = value.keep.clone();
+        let mut kaddr: Option<Hasher> = value.kaddr.clone();
         let (mut ifee, mut ofee) = (0, 0);
         let mut tx = Tx::default();
         tx.ver = 1;
@@ -63,17 +63,18 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
             tx.ins.push(inv);
             ifee += coin.value;
             //如果未设置找零输出账户使用最后一个
-            if value.keep.is_none() {
-                keep = Some(acc.get_address()?);
+            if value.kaddr.is_none() {
+                kaddr = Some(acc.get_address()?);
             }
         }
         for ele in value.outs.iter() {
             if ele.value == 0 {
                 continue;
             }
+            let addr = Account::decode(&ele.acc)?;
             let mut outv = TxOut::default();
             outv.value = ele.value;
-            outv.script = Script::new_script_out(&ele.acc)?;
+            outv.script = Script::new_script_out(&addr)?;
             tx.outs.push(outv);
             ofee += ele.value
         }
@@ -83,18 +84,18 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
         if ofee > ifee {
             return Error::msg("ofee > ifee error");
         }
-        //剩余的金额转到找零对象
+        //剩余的金额转到找零地址
         let kfee = ifee - ofee - value.tfee;
         if !consts::is_valid_amount(kfee) {
             return Error::msg("kfee error");
         }
-        if kfee > 0 && keep.is_none() {
-            return Error::msg("keep account miss");
+        if kfee > 0 && kaddr.is_none() {
+            return Error::msg("kaddr account miss");
         }
         if kfee > 0 {
             let mut outk = TxOut::default();
             outk.value = kfee;
-            outk.script = Script::new_script_out(&keep.unwrap())?;
+            outk.script = Script::new_script_out(&kaddr.unwrap())?;
             tx.outs.push(outk);
         }
         Ok(tx)
@@ -103,24 +104,35 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
 
 impl<'a> TxHelper<'a> {
     /// 设置找零账户hasher
-    pub fn set_keep(&mut self, keep: &Hasher) -> &mut Self {
-        self.keep = Some(keep.clone());
-        self
+    pub fn set_keep_addr(&mut self, addr: &str) -> Result<&mut Self, Error> {
+        let kaddr = Account::decode(addr)?;
+        self.kaddr = Some(kaddr.clone());
+        Ok(self)
     }
     /// 设置交易费
-    pub fn set_cost_fee(&mut self, fee: i64) -> &mut Self {
+    pub fn set_cost_fee(&mut self, fee: i64) -> Result<&mut Self, Error> {
         self.tfee = fee;
-        self
+        Ok(self)
     }
     /// 设置输出
-    pub fn set_outs(&mut self, eles: &Vec<TxOutEle>) -> &mut Self {
+    pub fn set_outs(&mut self, eles: &Vec<TxOutEle>) -> Result<&mut Self, Error> {
         self.outs = eles.clone();
-        self
+        Ok(self)
+    }
+    /// 添加输出
+    pub fn add_out(&mut self, ele: &TxOutEle) -> Result<&mut Self, Error> {
+        self.outs.push(ele.clone());
+        Ok(self)
     }
     /// 设置使用的金额
-    pub fn set_coins(&mut self, coins: &Vec<CoinAttr>) -> &mut Self {
+    pub fn set_coins(&mut self, coins: &Vec<CoinAttr>) -> Result<&mut Self, Error> {
         self.coins = coins.clone();
-        self
+        Ok(self)
+    }
+    /// 添加金额
+    pub fn add_coin(&mut self, coin: &CoinAttr) -> Result<&mut Self, Error> {
+        self.coins.push(coin.clone());
+        Ok(self)
     }
     pub fn new(ctx: &'a Chain) -> Self {
         TxHelper {
@@ -128,7 +140,7 @@ impl<'a> TxHelper<'a> {
             outs: vec![],
             tfee: 0,
             ctx: ctx,
-            keep: None,
+            kaddr: None,
         }
     }
 }
@@ -1012,7 +1024,7 @@ impl BlkIndexer {
         //开始写入
         let mut batch = IBatch::new(true);
         //最新best数据
-        let mut best = Best {
+        let mut next = Best {
             id: id.clone(),
             height: u32::MAX,
         };
@@ -1025,23 +1037,23 @@ impl BlkIndexer {
                 if blk.header.prev != prev.id()? {
                     return Error::msg("block prev != prev.id");
                 }
-                best.height = top.height + 1;
+                next.height = top.next();
                 //写入新的并保存旧的到回退数据
-                batch.set(&Self::BEST_KEY.into(), &best, &top);
+                batch.set(&Self::BEST_KEY.into(), &next, &top);
             }
             _ => {
                 //第一个区块符合配置的上帝区块就直接写入
                 if id != self.conf.genesis {
                     return Error::msg("first block not config genesis");
                 }
-                best.height = 0;
-                batch.put(&Self::BEST_KEY.into(), &best);
+                next.height = 0;
+                batch.put(&Self::BEST_KEY.into(), &next);
             }
         }
         //检测区块的金额和签名
-        self.check_block_amount(best.height, blk)?;
+        self.check_block_amount(next.height, blk)?;
         //高度对应的区块id
-        batch.put(&best.height_key(), &best.id);
+        batch.put(&next.height_key(), &next.id);
         //每个交易对应的区块信息和位置
         for (i, tx) in blk.txs.iter().enumerate() {
             let txid = &tx.id()?;
@@ -1054,14 +1066,14 @@ impl BlkIndexer {
                 idx: i as u16,   //在区块的位置
             };
             batch.put(&txid.into(), &txattr);
-            self.write_tx_index(&mut batch, &best, &tx)?;
+            self.write_tx_index(&mut batch, &next, &tx)?;
         }
         //id对应的区块头属性
         let mut attr = BlkAttr::default();
         //当前区块头
         attr.bhv = blk.header.clone();
         //当前区块高度
-        attr.hhv = best.height;
+        attr.hhv = next.height;
         //获取区块数据,回退数据并写入
         let blkwb = blk.bytes();
         let revwb = batch.reverse();
@@ -1072,7 +1084,7 @@ impl BlkIndexer {
         batch.put(key, &attr);
         //批量写入
         self.leveldb.write(&batch, true)?;
-        Ok(best)
+        Ok(next)
     }
     /// 获取交易信息
     fn get_tx(&mut self, id: &Hasher) -> Result<Tx, Error> {
@@ -1328,13 +1340,8 @@ fn test_simple_link_pop() {
     Config::test(|conf, idx| {
         let best = idx.best().unwrap();
         assert_eq!(0, best.height);
-        for i in 0u32..=10 {
-            let b1 = conf
-                .create_block(Hasher::zero(), i + 1, conf.pow_limit.compact(), "", |blk| {
-                    let best = idx.best().unwrap();
-                    blk.header.prev = best.id;
-                })
-                .unwrap();
+        for _ in 0u32..=10 {
+            let b1 = idx.new_block("", |_| {}).unwrap();
             idx.link(&b1).unwrap();
         }
         let best = idx.best().unwrap();

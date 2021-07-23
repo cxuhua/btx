@@ -1,23 +1,24 @@
 use crate::account::{Account, AccountPool};
 use crate::errors::Error;
-use crate::hasher::Hasher;
 use std::collections::HashMap;
-use std::convert::Into;
 use std::sync::Arc;
 /// 基于测试账户管理
 #[derive(Debug)]
 pub struct AccTestPool {
     pool: HashMap<String, Arc<Account>>,
+    keys: Vec<String>,
 }
 
 impl AccTestPool {
     pub fn new() -> Box<dyn AccountPool> {
         let mut pool = AccTestPool {
             pool: HashMap::<String, Arc<Account>>::default(),
+            keys: vec![],
         };
         for _ in 0..3 {
             let acc = Account::new(1, 1, false, true).unwrap();
             let addr = acc.encode().unwrap();
+            pool.keys.push(addr.clone());
             pool.pool.insert(addr, Arc::new(acc));
         }
         Box::new(pool)
@@ -27,18 +28,20 @@ impl AccTestPool {
 impl AccountPool for AccTestPool {
     fn get_account(&self, id: &str) -> Result<Arc<Account>, Error> {
         self.pool
-            .get(id.into())
+            .get(id)
             .map_or(Error::msg("not found"), |v| Ok(v.clone()))
     }
-    fn list_keys(&self) -> Vec<String> {
-        let mut keys = vec![];
-        for (key, _) in self.pool.iter() {
-            keys.push(key.clone());
-        }
-        keys
+    fn list_keys(&self) -> &Vec<String> {
+        &self.keys
     }
     fn len(&self) -> usize {
         self.pool.len()
+    }
+    fn index(&self, idx: usize) -> Result<Arc<Account>, Error> {
+        if idx >= self.len() {
+            return Error::msg("idx error");
+        }
+        self.get_account(&self.keys[idx])
     }
 }
 
