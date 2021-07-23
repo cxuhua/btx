@@ -28,8 +28,17 @@ use std::sync::RwLock;
 /// 交易助手输出元素
 #[derive(Debug, Clone)]
 pub struct TxOutEle {
-    value: i64,  //输出金额
-    acc: String, //输出地址
+    value: i64,   //输出金额
+    addr: String, //输出地址
+}
+
+impl TxOutEle {
+    pub fn new(addr: &str, coin: i64) -> Self {
+        TxOutEle {
+            value: coin,
+            addr: addr.into(),
+        }
+    }
 }
 
 /// 交易助手
@@ -71,7 +80,7 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
             if ele.value == 0 {
                 continue;
             }
-            let addr = Account::decode(&ele.acc)?;
+            let addr = Account::decode(&ele.addr)?;
             let mut outv = TxOut::default();
             outv.value = ele.value;
             outv.script = Script::new_script_out(&addr)?;
@@ -495,6 +504,11 @@ impl HasKey for CoinAttr {
 }
 
 impl CoinAttr {
+    /// 获取金额
+    #[inline]
+    pub fn coin(&self) -> i64 {
+        self.value
+    }
     /// 是否来自交易池
     pub fn is_txpool(&self) -> bool {
         self.flags & COIN_ATTR_FLAGS_TXPOOL != 0
@@ -1226,7 +1240,7 @@ impl Chain {
     /// 根据账户地址获取账户信息
     pub fn account(&self, id: &Hasher) -> Result<Arc<Account>, Error> {
         self.do_read(|v| match v.acp {
-            Some(ref acp) => acp.get_account(&id.string()?),
+            Some(ref acp) => acp.account(&id.string()?),
             None => Error::msg("account pool miss"),
         })
     }
@@ -1312,19 +1326,12 @@ impl Chain {
 fn test_indexer_thread() {
     use std::sync::Arc;
     use std::{thread, time};
-    Config::test(|conf, idx| {
+    Config::test(|_, idx| {
         let indexer = Arc::new(idx);
-        for b in 0..10 {
+        for _ in 0..10 {
             let idx = indexer.clone();
-            let conf = conf.clone();
             thread::spawn(move || {
-                let iv = b;
-                let b1 = conf
-                    .create_block(Hasher::zero(), iv, conf.pow_limit.compact(), "", |blk| {
-                        let best = idx.best().unwrap();
-                        blk.header.prev = best.id;
-                    })
-                    .unwrap();
+                let b1 = idx.new_block("", |_| {}).unwrap();
                 idx.link(&b1).unwrap();
                 let id = b1.id().unwrap();
                 let b2 = idx.get(&id.as_ref().into()).unwrap();
@@ -1431,4 +1438,31 @@ fn test_lru_cache() {
     let v = c.pop(&1u32.into()).unwrap();
     assert_eq!(v.as_ref(), &Block::default());
     assert_eq!(0, c.len());
+}
+
+#[test]
+fn test_tx_helper() {
+    use crate::config::Config;
+    use crate::consts;
+    Config::test(|conf, idx| {
+        //这个账户有钱
+        let acc = conf.acc.as_ref().unwrap();
+        //创建100个区块
+        for _ in 0..consts::COINBASE_MATURITY {
+            let b = idx.new_block("", |_| {}).unwrap();
+            idx.link(&b).unwrap();
+        }
+        let best = idx.best().unwrap();
+        assert_eq!(best.height, 100);
+        let mut helper = idx.new_helper();
+        let coins = idx.coins(&acc).unwrap();
+        for coin in coins.iter() {
+            if !coin.is_valid(best.next()) {
+                continue;
+            }
+            helper.add_coin(coin).unwrap();
+        }
+        //height: 0 1 区块可用
+        assert_eq!(helper.coins.len(), 2);
+    });
 }

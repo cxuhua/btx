@@ -26,7 +26,7 @@ impl AccTestPool {
 }
 
 impl AccountPool for AccTestPool {
-    fn get_account(&self, id: &str) -> Result<Arc<Account>, Error> {
+    fn account(&self, id: &str) -> Result<Arc<Account>, Error> {
         self.pool
             .get(id)
             .map_or(Error::msg("not found"), |v| Ok(v.clone()))
@@ -37,11 +37,17 @@ impl AccountPool for AccTestPool {
     fn len(&self) -> usize {
         self.pool.len()
     }
-    fn index(&self, idx: usize) -> Result<Arc<Account>, Error> {
+    fn value(&self, idx: usize) -> Result<Arc<Account>, Error> {
         if idx >= self.len() {
             return Error::msg("idx error");
         }
-        self.get_account(&self.keys[idx])
+        self.account(&self.keys[idx])
+    }
+    fn key(&self, idx: usize) -> Result<&String, Error> {
+        if idx >= self.len() {
+            return Error::msg("idx error");
+        }
+        Ok(&self.keys[idx])
     }
 }
 
