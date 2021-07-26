@@ -29,7 +29,7 @@ impl AccountPool for AccTestPool {
     fn account(&self, id: &str) -> Result<Arc<Account>, Error> {
         self.pool
             .get(id)
-            .map_or(Error::msg("not found"), |v| Ok(v.clone()))
+            .map_or(Error::msg("not found account"), |v| Ok(v.clone()))
     }
     fn list_keys(&self) -> &Vec<String> {
         &self.keys

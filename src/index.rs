@@ -129,8 +129,11 @@ impl<'a> TxHelper<'a> {
         Ok(self)
     }
     /// 添加输出
-    pub fn add_out(&mut self, ele: &TxOutEle) -> Result<&mut Self, Error> {
-        self.outs.push(ele.clone());
+    pub fn add_out(&mut self, addr: &str, coin: i64) -> Result<&mut Self, Error> {
+        self.outs.push(TxOutEle {
+            addr: addr.into(),
+            value: coin,
+        });
         Ok(self)
     }
     /// 设置使用的金额
@@ -699,7 +702,7 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
     /// 设置账户池对象
-    pub fn account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+    pub fn set_account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
         self.acp = Some(acp);
         Ok(())
     }
@@ -1230,12 +1233,19 @@ pub struct Chain(RwLock<BlkIndexer>);
 
 impl Chain {
     /// 设置账户池
-    pub fn account_pool(&self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
-        self.do_write(|v| v.account_pool(acp))
+    pub fn set_account_pool(&self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+        self.do_write(|v| v.set_account_pool(acp))
     }
     /// 创建交易助手
     pub fn new_helper<'a>(&'a self) -> TxHelper<'a> {
         TxHelper::new(self)
+    }
+    /// 根据未知获取账户信息
+    pub fn account_with_index(&self, idx: usize) -> Result<Arc<Account>, Error> {
+        self.do_read(|v| match v.acp {
+            Some(ref acp) => acp.value(idx),
+            None => Error::msg("account pool miss"),
+        })
     }
     /// 根据账户地址获取账户信息
     pub fn account(&self, id: &Hasher) -> Result<Arc<Account>, Error> {
@@ -1460,9 +1470,25 @@ fn test_tx_helper() {
             if !coin.is_valid(best.next()) {
                 continue;
             }
+            //添加金额记录
             helper.add_coin(coin).unwrap();
         }
         //height: 0 1 区块可用
         assert_eq!(helper.coins.len(), 2);
+        //账户1转10*COIN
+        let acc1 = idx.account_with_index(0).unwrap();
+        helper
+            .add_out(&acc1.string().unwrap(), 10 * consts::COIN)
+            .unwrap();
+        //账户2转20*COIN
+        let acc2 = idx.account_with_index(1).unwrap();
+        helper
+            .add_out(&acc2.string().unwrap(), 20 * consts::COIN)
+            .unwrap();
+        //交易费
+        helper.set_cost_fee(1 * consts::COIN).unwrap();
+
+        let tx = Tx::try_from(&helper).unwrap();
+        println!("{}", tx);
     });
 }

@@ -9,6 +9,7 @@ use crate::merkle::MerkleTree;
 use crate::script::*;
 use crate::store::Attr;
 use crate::util;
+use core::fmt;
 use std::collections::HashSet;
 use std::convert::TryInto;
 
@@ -557,6 +558,32 @@ pub struct Tx {
     pub ins: Vec<TxIn>,
     ///输出列表
     pub outs: Vec<TxOut>,
+}
+
+impl fmt::Display for Tx {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(
+            f,
+            "## ver={} ,ins len={} ,outs len={}",
+            self.ver,
+            self.ins.len(),
+            self.outs.len()
+        )?;
+        for (i, inv) in self.ins.iter().enumerate() {
+            writeln!(f, "#{} in={}", i, inv.string().unwrap())?;
+        }
+        for (i, outv) in self.outs.iter().enumerate() {
+            writeln!(
+                f,
+                "#{} out={} value={}",
+                i,
+                outv.string().unwrap(),
+                outv.value
+            )?;
+        }
+        writeln!(f, "## id={}", self.id().unwrap())?;
+        Ok(())
+    }
 }
 
 impl Checker for Tx {

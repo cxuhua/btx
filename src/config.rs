@@ -121,8 +121,9 @@ impl Config {
     {
         let tmp = TempDir::new("btx").unwrap();
         let dir = tmp.path().to_str().unwrap();
-        //测试账户包含了私钥的默认测试账户
-        let acc = Account::decode_from_bech32("aps1qgp07q3pqwm4kyqpxxnknu04xafv7ecwpha9dmwg5ae58lckq6g5a4r3cepx7ggz9y4cgwdyjpgkcvmcd0eaezykj2r5qvzcutpc8gghs6uf5qu5uk7qygxkhplmnz9ymd909v8y0rsk59wlppfjd52hfe47ult5p605zzk6nqsxf8x9n8dwwue7atwxrchana3u6h564l9wqrs3mqsc9ankppwwrve4ljrjgqtdunqzlvjm7lqhz8jgsehtu5gvj0gh9g7ku0x8paejzuqcxgs7");
+        let accpool = AccTestPool::new();
+        //2号账户用来存放区块奖励
+        let acc = accpool.value(2).unwrap();
         let mut conf = Config {
             ver: 1,
             dir: dir.into(),
@@ -133,7 +134,7 @@ impl Config {
             pow_time: 14 * 24 * 60 * 60,
             pow_span: 2016,
             halving: 210000,
-            acc: Some(acc.unwrap()),
+            acc: Some((*acc).clone()),
         };
         //创建第一个区块
         let blk = conf
@@ -149,7 +150,7 @@ impl Config {
         //打开数据库
         let idx = Chain::new(&conf).unwrap();
         //设置账户管理器
-        idx.account_pool(AccTestPool::new()).unwrap();
+        idx.set_account_pool(accpool).unwrap();
         //链接第一个genesis区块
         idx.link(&blk).unwrap();
         tf(&conf, idx);
