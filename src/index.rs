@@ -61,9 +61,11 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
         let (mut ifee, mut ofee) = (0, 0);
         let mut tx = Tx::default();
         tx.ver = 1;
+        //获取账户池
+        let accpool = value.ctx.get_account_pool()?;
         for coin in value.coins.iter() {
             //金额对应的账户信息,如果没有将不能消费这个金额
-            let acc = value.ctx.account(&coin.cpk)?;
+            let acc = accpool.account(&coin.cpk.string()?)?;
             let mut inv = TxIn::default();
             inv.out = coin.tx.clone();
             inv.idx = coin.idx;
@@ -597,37 +599,38 @@ fn test_block_index_coin_save() {
     Config::test(|conf, idx| {
         let acc = conf.acc.as_ref().unwrap();
         //只加入的genesis区块
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(best.id, conf.genesis);
-        let coins = idx.coins(&acc).unwrap();
+        let coins = idx.coins(&acc)?;
         assert_eq!(1, coins.len());
-        assert_eq!(coins[0].cpk, acc.hash().unwrap());
+        assert_eq!(coins[0].cpk, acc.hash()?);
         assert_eq!(coins[0].value, consts::coin(50));
         assert_eq!(coins[0].flags, 1);
         assert_eq!(coins[0].height, 0);
         //链接一个新的区块
-        let blk = idx.new_block("second", |_| {}).unwrap();
-        let best = idx.link(&blk).unwrap();
+        let blk = idx.new_block("second", |_| {})?;
+        let best = idx.link(&blk)?;
         assert_eq!(best.height, 1);
-        let coins = idx.coins(&acc).unwrap();
+        let coins = idx.coins(&acc)?;
         assert_eq!(2, coins.len());
         assert_eq!(coins[0].height, 0);
-        assert_eq!(coins[1].cpk, acc.hash().unwrap());
+        assert_eq!(coins[1].cpk, acc.hash()?);
         assert_eq!(coins[1].value, consts::coin(50));
         assert_eq!(coins[1].flags, 1);
         assert_eq!(coins[1].height, 1);
-        let pop = idx.pop().unwrap();
-        assert_eq!(pop.id().unwrap(), blk.id().unwrap());
+        let pop = idx.pop()?;
+        assert_eq!(pop.id()?, blk.id()?);
         //弹出一个只剩下genesis区块了
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(best.id, conf.genesis);
-        let coins = idx.coins(&acc).unwrap();
+        let coins = idx.coins(&acc)?;
         assert_eq!(1, coins.len());
-        assert_eq!(coins[0].cpk, acc.hash().unwrap());
+        assert_eq!(coins[0].cpk, acc.hash()?);
         assert_eq!(coins[0].value, consts::coin(50));
         assert_eq!(coins[0].flags, 1);
         assert_eq!(coins[0].height, 0);
         assert_eq!(idx.pop().is_err(), true);
+        Ok(())
     });
 }
 
@@ -639,7 +642,7 @@ pub struct BlkIndexer {
     rev: Store,                        //回退日志存储
     conf: Config,                      //配置信息
     pool: TxPool,                      //交易内存池,获取到的新交易存在,按交易费从高到低存放
-    acp: Option<Box<dyn AccountPool>>, //账户池
+    acp: Option<Arc<dyn AccountPool>>, //账户池
 }
 
 /// 签名验证数据缓存
@@ -701,8 +704,15 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
+    /// 获取账户池
+    pub fn get_account_pool(&self) -> Result<Arc<dyn AccountPool>, Error> {
+        match &self.acp {
+            Some(acp) => Ok(acp.clone()),
+            None => Error::msg("acc pool miss"),
+        }
+    }
     /// 设置账户池对象
-    pub fn set_account_pool(&mut self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+    pub fn set_account_pool(&mut self, acp: Arc<dyn AccountPool>) -> Result<(), Error> {
         self.acp = Some(acp);
         Ok(())
     }
@@ -1232,27 +1242,17 @@ impl BlkIndexer {
 pub struct Chain(RwLock<BlkIndexer>);
 
 impl Chain {
+    /// 获取账户池
+    pub fn get_account_pool(&self) -> Result<Arc<dyn AccountPool>, Error> {
+        self.do_read(|v| v.get_account_pool())
+    }
     /// 设置账户池
-    pub fn set_account_pool(&self, acp: Box<dyn AccountPool>) -> Result<(), Error> {
+    pub fn set_account_pool(&self, acp: Arc<dyn AccountPool>) -> Result<(), Error> {
         self.do_write(|v| v.set_account_pool(acp))
     }
     /// 创建交易助手
     pub fn new_helper<'a>(&'a self) -> TxHelper<'a> {
         TxHelper::new(self)
-    }
-    /// 根据未知获取账户信息
-    pub fn account_with_index(&self, idx: usize) -> Result<Arc<Account>, Error> {
-        self.do_read(|v| match v.acp {
-            Some(ref acp) => acp.value(idx),
-            None => Error::msg("account pool miss"),
-        })
-    }
-    /// 根据账户地址获取账户信息
-    pub fn account(&self, id: &Hasher) -> Result<Arc<Account>, Error> {
-        self.do_read(|v| match v.acp {
-            Some(ref acp) => acp.account(&id.string()?),
-            None => Error::msg("account pool miss"),
-        })
     }
     /// 从当前链顶创建一个新区块
     pub fn new_block<F>(&self, cbstr: &str, ff: F) -> Result<Block, Error>
@@ -1330,6 +1330,10 @@ impl Chain {
     pub fn remove(&self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.do_write(|v| v.remove(id))
     }
+    /// 计算获取交易费
+    pub fn get_tx_transaction_fee(&self, tx: &Tx) -> Result<i64, Error> {
+        self.do_write(|v| v.get_tx_transaction_fee(tx))
+    }
 }
 
 #[test]
@@ -1349,28 +1353,30 @@ fn test_indexer_thread() {
             });
         }
         thread::sleep(time::Duration::from_secs(1));
+        Ok(())
     })
 }
 
 #[test]
 fn test_simple_link_pop() {
     Config::test(|conf, idx| {
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(0, best.height);
         for _ in 0u32..=10 {
-            let b1 = idx.new_block("", |_| {}).unwrap();
-            idx.link(&b1).unwrap();
+            let b1 = idx.new_block("", |_| {})?;
+            idx.link(&b1)?;
         }
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(11, best.height);
         for i in 0u32..=10 {
-            let best = idx.best().unwrap();
+            let best = idx.best()?;
             assert_eq!(11 - i, best.height);
-            idx.pop().unwrap();
+            idx.pop()?;
         }
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(0, best.height);
         assert_eq!(best.id, conf.genesis);
+        Ok(())
     });
 }
 
@@ -1459,36 +1465,36 @@ fn test_tx_helper() {
         let acc = conf.acc.as_ref().unwrap();
         //创建100个区块
         for _ in 0..consts::COINBASE_MATURITY {
-            let b = idx.new_block("", |_| {}).unwrap();
-            idx.link(&b).unwrap();
+            let b = idx.new_block("", |_| {})?;
+            idx.link(&b)?;
         }
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(best.height, 100);
         let mut helper = idx.new_helper();
-        let coins = idx.coins(&acc).unwrap();
+        let coins = idx.coins(&acc)?;
         for coin in coins.iter() {
             if !coin.is_valid(best.next()) {
                 continue;
             }
             //添加金额记录
-            helper.add_coin(coin).unwrap();
+            helper.add_coin(coin)?;
         }
         //height: 0 1 区块可用
         assert_eq!(helper.coins.len(), 2);
+        //获取账户池
+        let accpool = idx.get_account_pool()?;
         //账户1转10*COIN
-        let acc1 = idx.account_with_index(0).unwrap();
-        helper
-            .add_out(&acc1.string().unwrap(), 10 * consts::COIN)
-            .unwrap();
+        let acc1 = accpool.value(0)?;
+        helper.add_out(&acc1.string()?, 10 * consts::COIN)?;
         //账户2转20*COIN
-        let acc2 = idx.account_with_index(1).unwrap();
-        helper
-            .add_out(&acc2.string().unwrap(), 20 * consts::COIN)
-            .unwrap();
+        let acc2 = accpool.value(1)?;
+        helper.add_out(&acc2.string()?, 20 * consts::COIN)?;
         //交易费
-        helper.set_cost_fee(1 * consts::COIN).unwrap();
+        helper.set_cost_fee(1 * consts::COIN)?;
 
-        let tx = Tx::try_from(&helper).unwrap();
-        println!("{}", tx);
+        let tx = Tx::try_from(&helper)?;
+        assert_eq!(1 * consts::COIN, idx.get_tx_transaction_fee(&tx)?);
+
+        Ok(())
     });
 }

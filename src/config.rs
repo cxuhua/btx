@@ -8,6 +8,7 @@ use crate::index::Chain;
 use crate::script::Script;
 use crate::util;
 use std::convert::TryInto;
+use std::sync::Arc;
 use tempdir::TempDir;
 
 #[derive(Clone, Debug)]
@@ -27,7 +28,7 @@ pub struct Config {
     /// 区块版本
     pub ver: u16,
     /// 默认账户信息
-    pub acc: Option<Account>,
+    pub acc: Option<Arc<Account>>,
 }
 
 impl Config {
@@ -117,7 +118,7 @@ impl Config {
     /// tf在这个配置上创建链测试方法
     pub fn test<F>(tf: F)
     where
-        F: FnOnce(&Config, Chain),
+        F: FnOnce(&Config, Chain) -> Result<(), Error>,
     {
         let tmp = TempDir::new("btx").unwrap();
         let dir = tmp.path().to_str().unwrap();
@@ -134,7 +135,7 @@ impl Config {
             pow_time: 14 * 24 * 60 * 60,
             pow_span: 2016,
             halving: 210000,
-            acc: Some((*acc).clone()),
+            acc: Some(acc.clone()),
         };
         //创建第一个区块
         let blk = conf
@@ -153,7 +154,7 @@ impl Config {
         idx.set_account_pool(accpool).unwrap();
         //链接第一个genesis区块
         idx.link(&blk).unwrap();
-        tf(&conf, idx);
+        tf(&conf, idx).unwrap();
     }
     /// 发布配置
     pub fn release() -> Self {
@@ -177,8 +178,9 @@ impl Config {
 #[test]
 fn test_create_genesis() {
     Config::test(|conf, idx| {
-        let best = idx.best().unwrap();
+        let best = idx.best()?;
         assert_eq!(best.id, conf.genesis);
+        Ok(())
     });
 }
 
@@ -193,5 +195,6 @@ fn test_compute_reward() {
         assert_eq!(v1, 50 * consts::COIN / 4);
         let v1 = conf.compute_reward((conf.halving * 3) as u32);
         assert_eq!(v1, 50 * consts::COIN / 8);
+        Ok(())
     });
 }

@@ -10,7 +10,7 @@ pub struct AccTestPool {
 }
 
 impl AccTestPool {
-    pub fn new() -> Box<dyn AccountPool> {
+    pub fn new() -> Arc<dyn AccountPool> {
         let mut pool = AccTestPool {
             pool: HashMap::<String, Arc<Account>>::default(),
             keys: vec![],
@@ -21,7 +21,7 @@ impl AccTestPool {
             pool.keys.push(addr.clone());
             pool.pool.insert(addr, Arc::new(acc));
         }
-        Box::new(pool)
+        Arc::new(pool)
     }
 }
 
