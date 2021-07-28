@@ -86,7 +86,7 @@ impl Config {
         ff: F,
     ) -> Result<Block, Error>
     where
-        F: FnOnce(&mut Block),
+        F: FnOnce(&mut Block) -> Result<(), Error>,
     {
         if self.acc.is_none() {
             return Error::msg("acc option miss");
@@ -97,7 +97,7 @@ impl Config {
         let cb = self.new_coinbase(h, cbstr, &acc)?;
         blk.append(cb);
         //完成区块时的而外工作
-        ff(&mut blk);
+        ff(&mut blk)?;
         //计算默克尔树
         blk.finish()?;
         //计算工作量
@@ -144,7 +144,7 @@ impl Config {
                 0,
                 conf.pow_limit.compact(),
                 "genesis test block",
-                |_| {},
+                |_| Ok(()),
             )
             .unwrap();
         conf.genesis = blk.id().unwrap();

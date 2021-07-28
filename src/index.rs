@@ -630,7 +630,7 @@ fn test_block_index_coin_save() {
         assert_eq!(coins[0].flags, 1);
         assert_eq!(coins[0].height, 0);
         //链接一个新的区块
-        let blk = idx.new_block("second", |_| {})?;
+        let blk = idx.new_block("second", |_| Ok(()))?;
         let best = idx.link(&blk)?;
         assert_eq!(best.height, 1);
         let coins = idx.coins(&acc)?;
@@ -701,6 +701,8 @@ pub trait TxSigner {
         LinkExectorCache::new(tx)
     }
     /// 获取签名脚本
+    /// inv:当前输入
+    /// outv:当前输入引用的输出
     fn get_sign_script(
         &self,
         cache: &LinkExectorCache,
@@ -709,6 +711,8 @@ pub trait TxSigner {
         accpool: Arc<dyn AccountPool>,
     ) -> Result<Script, Error>;
     /// 获取签名数据
+    /// inv:当前输入
+    /// outv:当前输入引用的输出
     fn get_sign_bytes(
         &self,
         cache: &LinkExectorCache,
@@ -803,7 +807,7 @@ impl BlkIndexer {
     /// cbstr: coinbase区块自定义信息
     pub fn new_block<F>(&mut self, cbstr: &str, ff: F) -> Result<Block, Error>
     where
-        F: FnOnce(&mut Block),
+        F: FnOnce(&mut Block) -> Result<(), Error>,
     {
         let best = self.best()?;
         let height = best.next();
@@ -1365,7 +1369,7 @@ impl Chain {
     /// 从当前链顶创建一个新区块
     pub fn new_block<F>(&self, cbstr: &str, ff: F) -> Result<Block, Error>
     where
-        F: FnOnce(&mut Block),
+        F: FnOnce(&mut Block) -> Result<(), Error>,
     {
         self.do_write(|v| v.new_block(cbstr, ff))
     }
@@ -1458,7 +1462,7 @@ fn test_indexer_thread() {
         for _ in 0..10 {
             let idx = indexer.clone();
             thread::spawn(move || {
-                let b1 = idx.new_block("", |_| {}).unwrap();
+                let b1 = idx.new_block("", |_| Ok(())).unwrap();
                 idx.link(&b1).unwrap();
                 let id = b1.id().unwrap();
                 let b2 = idx.get(&id.as_ref().into()).unwrap();
@@ -1476,7 +1480,7 @@ fn test_simple_link_pop() {
         let best = idx.best()?;
         assert_eq!(0, best.height);
         for _ in 0u32..=10 {
-            let b1 = idx.new_block("", |_| {})?;
+            let b1 = idx.new_block("", |_| Ok(()))?;
             idx.link(&b1)?;
         }
         let best = idx.best()?;
@@ -1578,7 +1582,7 @@ fn test_tx_helper() {
         let acc = conf.acc.as_ref().unwrap();
         //创建100个区块
         for _ in 0..consts::COINBASE_MATURITY {
-            let b = idx.new_block("", |_| {})?;
+            let b = idx.new_block("", |_| Ok(()))?;
             idx.link(&b)?;
         }
         let best = idx.best()?;
@@ -1612,7 +1616,7 @@ fn test_tx_helper() {
         //新交易放入交易池
         let id = idx.append(&tx)?;
         //从交易池拉取交易列表
-
+        println!("{:x?}", tx);
         Ok(())
     });
 }
