@@ -327,7 +327,7 @@ impl Account {
         }
     }
     //检测私钥对应的公钥是否正确
-    fn check_pris_pubs(&self) -> bool {
+    pub fn check_pris_pubs(&self) -> bool {
         if self.pubs_size() != self.pris_size() {
             return false;
         }
@@ -470,6 +470,13 @@ impl Account {
             None => errors::Error::msg("InvalidPrivateKey"),
         }
     }
+    /// 全签名数据
+    pub fn sign_full(&mut self, msg: &[u8]) -> Result<(), errors::Error> {
+        for idx in 0..self.pris.len() {
+            self.sign_with_index(idx, msg)?;
+        }
+        Ok(())
+    }
     ///使用指定的公钥验签所有签名,如果其中一个通过返回true
     pub fn verify_with_public(&self, ipub: usize, msg: &[u8]) -> Result<bool, errors::Error> {
         if ipub >= self.pubs.len() {
@@ -520,15 +527,15 @@ impl Account {
     pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
         //检测账户是否包含公钥
         if !self.check_with_pubs() {
-            return errors::Error::msg("InvalidAccount");
+            return errors::Error::msg("verify sign error, check_with_pubs ");
         }
         //不启用仲裁时最小签名数量
         if !self.use_arb() && self.sigs_size() < self.less {
-            return errors::Error::msg("InvalidAccount");
+            return errors::Error::msg("verify sign error, sigs size < less");
         }
         //启用时至少一个签名
         if self.use_arb() && self.sigs_size() < 1 {
-            return errors::Error::msg("InvalidAccount");
+            return errors::Error::msg("verify sign error, sigs size < 1");
         }
         //验证仲裁公钥签名
         if self.use_arb() {

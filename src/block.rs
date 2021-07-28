@@ -809,7 +809,7 @@ impl TxIn {
 impl Checker for TxIn {
     fn check_value(&self, _ctx: &BlkIndexer) -> Result<(), Error> {
         //检测非coinbase输出是否正确
-        if !self.is_coinbase() && (self.out.is_zero() || self.idx == 0) {
+        if !self.is_coinbase() && self.out.is_zero() {
             return Error::msg("input out idx error");
         }
         //检测脚本类型,输入必须输入或者cb脚本

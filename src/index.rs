@@ -44,41 +44,45 @@ impl TxOutEle {
 /// 交易助手
 /// 生成交易信息
 pub struct TxHelper<'a> {
-    coins: Vec<CoinAttr>,  //使用的金额作为输入信息
-    outs: Vec<TxOutEle>,   //输出金额
-    tfee: i64,             //交易费
-    ctx: &'a Chain,        //链对象
-    kaddr: Option<Hasher>, //找零地址
+    ver: u32,                          //交易版本
+    coins: Vec<CoinAttr>,              //使用的金额作为输入信息
+    outs: Vec<TxOutEle>,               //输出金额
+    tfee: i64,                         //交易费
+    ctx: &'a Chain,                    //链对象
+    kaddr: Option<Hasher>,             //找零地址
+    signer: Option<Box<dyn TxSigner>>, //签名器,如果设置执行签名
 }
 
 impl<'a> TryFrom<&TxHelper<'a>> for Tx {
     type Error = Error;
-    fn try_from(value: &TxHelper<'a>) -> Result<Self, Self::Error> {
-        if !consts::is_valid_amount(value.tfee) {
+    fn try_from(helper: &TxHelper<'a>) -> Result<Self, Self::Error> {
+        if !consts::is_valid_amount(helper.tfee) {
             return Error::msg("tfee error");
         }
-        let mut kaddr: Option<Hasher> = value.kaddr.clone();
+        let mut kaddr: Option<Hasher> = helper.kaddr.clone();
         let (mut ifee, mut ofee) = (0, 0);
         let mut tx = Tx::default();
-        tx.ver = 1;
+        tx.ver = helper.ver;
         //获取账户池
-        let accpool = value.ctx.get_account_pool()?;
-        for coin in value.coins.iter() {
+        let accpool = helper.ctx.get_account_pool()?;
+        for coin in helper.coins.iter() {
             //金额对应的账户信息,如果没有将不能消费这个金额
             let acc = accpool.account(&coin.cpk.string()?)?;
             let mut inv = TxIn::default();
             inv.out = coin.tx.clone();
             inv.idx = coin.idx;
+            //未签名脚本
             inv.script = Script::new_script_in(&acc)?;
             inv.seq = 0;
             tx.ins.push(inv);
             ifee += coin.value;
-            //如果未设置找零输出账户使用最后一个
-            if value.kaddr.is_none() {
+            //如果未设置找零输出账户使用第一个
+            if kaddr.is_none() {
                 kaddr = Some(acc.get_address()?);
             }
         }
-        for ele in value.outs.iter() {
+        for ele in helper.outs.iter() {
+            //不允许金额为0的输出
             if ele.value == 0 {
                 continue;
             }
@@ -96,7 +100,7 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
             return Error::msg("ofee > ifee error");
         }
         //剩余的金额转到找零地址
-        let kfee = ifee - ofee - value.tfee;
+        let kfee = ifee - ofee - helper.tfee;
         if !consts::is_valid_amount(kfee) {
             return Error::msg("kfee error");
         }
@@ -109,11 +113,20 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
             outk.script = Script::new_script_out(&kaddr.unwrap())?;
             tx.outs.push(outk);
         }
+        //如果设置签名处理器立即签名交易
+        if let Some(ref signer) = helper.signer {
+            signer.sign_tx(helper.ctx, &mut tx)?;
+        }
         Ok(tx)
     }
 }
 
 impl<'a> TxHelper<'a> {
+    /// 设置交易版本
+    pub fn set_signer(&mut self, signer: Box<dyn TxSigner>) -> Result<&mut Self, Error> {
+        self.signer = Some(signer);
+        Ok(self)
+    }
     /// 设置找零账户hasher
     pub fn set_keep_addr(&mut self, addr: &str) -> Result<&mut Self, Error> {
         let kaddr = Account::decode(addr)?;
@@ -148,13 +161,20 @@ impl<'a> TxHelper<'a> {
         self.coins.push(coin.clone());
         Ok(self)
     }
+    /// 设置交易版本
+    pub fn set_ver(&mut self, ver: u32) -> Result<&mut Self, Error> {
+        self.ver = ver;
+        Ok(self)
+    }
     pub fn new(ctx: &'a Chain) -> Self {
         TxHelper {
+            ver: 1,
             coins: vec![],
             outs: vec![],
             tfee: 0,
             ctx: ctx,
             kaddr: None,
+            signer: None,
         }
     }
 }
@@ -249,10 +269,12 @@ impl TxPool {
     }
     /// 添加交易,添加前需要检测是否合法
     /// fee要先计算出来
-    pub fn push(&mut self, tx: &Tx, fee: i64) -> Result<(), Error> {
+    /// 返回交易id
+    pub fn push(&mut self, tx: &Tx, fee: i64) -> Result<Hasher, Error> {
         //检测是否可进入交易池
         self.check_value(tx)?;
-        let ref key: IKey = tx.id()?.as_ref().into();
+        let id = tx.id()?;
+        let ref key: IKey = id.as_ref().into();
         let rtx = Arc::new(tx.clone());
         self.byid.insert(key.clone(), rtx.clone());
         //如果已经存在追加到数组中
@@ -264,7 +286,7 @@ impl TxPool {
                 self.byfee.insert(fee, vec![rtx.clone()]);
             }
         }
-        Ok(())
+        Ok(id)
     }
     /// 按交易id移除成功返回交易信息
     pub fn remove(&mut self, id: &Hasher) -> Result<Arc<Tx>, Error> {
@@ -646,9 +668,10 @@ pub struct BlkIndexer {
 }
 
 /// 签名验证数据缓存
-struct LinkExectorCache {
-    outs: Hasher, //输出hash缓存 tx.outs
-    refs: Hasher, //引用hash缓存 tx.ins.out tx.ins.idx
+pub struct LinkExectorCache {
+    pub ver: u32,     //交易版本
+    pub outs: Hasher, //输出hash缓存 tx.outs
+    pub refs: Hasher, //引用hash缓存 tx.ins.out tx.ins.idx
 }
 
 impl LinkExectorCache {
@@ -664,9 +687,80 @@ impl LinkExectorCache {
             refs.u16(inv.idx);
         }
         Ok(LinkExectorCache {
+            ver: tx.ver,
             outs: Hasher::hash(outs.bytes()),
             refs: Hasher::hash(refs.bytes()),
         })
+    }
+}
+
+/// 交易签名器
+pub trait TxSigner {
+    /// 获取签名缓存器
+    fn get_sign_cache(&self, tx: &Tx) -> Result<LinkExectorCache, Error> {
+        LinkExectorCache::new(tx)
+    }
+    /// 获取签名脚本
+    fn get_sign_script(
+        &self,
+        cache: &LinkExectorCache,
+        inv: &TxIn,
+        outv: &TxOut,
+        accpool: Arc<dyn AccountPool>,
+    ) -> Result<Script, Error>;
+    /// 获取签名数据
+    fn get_sign_bytes(
+        &self,
+        cache: &LinkExectorCache,
+        inv: &TxIn,
+        outv: &TxOut,
+    ) -> Result<Writer, Error> {
+        let mut w = Writer::default();
+        w.u32(cache.ver); //版本
+        w.encode(&cache.refs); //引用hash
+        inv.encode_sign(&mut w)?; //输入
+        outv.encode_sign(&mut w)?; //引用的输出
+        w.encode(&cache.outs); //输出hash
+        Ok(w)
+    }
+    /// 签名交易
+    fn sign_tx(&self, ctx: &Chain, tx: &mut Tx) -> Result<(), Error> {
+        let accpool = ctx.get_account_pool()?;
+        let cache = self.get_sign_cache(tx)?;
+        for inv in tx.ins.iter_mut() {
+            let outv = ctx.get_txin_ref_txout(&inv)?;
+            inv.script = self.get_sign_script(&cache, &inv, &outv, accpool.clone())?
+        }
+        Ok(())
+    }
+}
+
+/// 全签名验证器
+pub struct FullSigner {}
+
+impl TxSigner for FullSigner {
+    /// 获取带签名的输入脚本
+    fn get_sign_script(
+        &self,
+        cache: &LinkExectorCache,
+        inv: &TxIn,
+        outv: &TxOut,
+        accpool: Arc<dyn AccountPool>,
+    ) -> Result<Script, Error> {
+        //输入应该已经设置消费账户
+        let addr = inv.string()?;
+        //获取输入对应的账户
+        let acc = accpool.account(&addr)?;
+        if !acc.check_pris_pubs() {
+            return Error::msg("acc miss private key");
+        }
+        let mut acc = (*acc).clone();
+        //获取签名数据
+        let msg = self.get_sign_bytes(cache, inv, outv)?;
+        //全部签名
+        acc.sign_full(msg.bytes())?;
+        //返回包含签名的脚本
+        Script::new_script_in(&acc)
     }
 }
 
@@ -674,26 +768,14 @@ impl LinkExectorCache {
 struct LinkExectorEnv<'a> {
     tx: &'a Tx,                  //当前交易
     inv: &'a TxIn,               //当前输入
-    outv: &'a TxOut,             //输入对应的输出
+    outv: &'a TxOut,             //输入引用的输出
     cache: &'a LinkExectorCache, //执行交易缓存
-}
-
-impl<'a> LinkExectorEnv<'a> {
-    //获取签名数据
-    fn get_sign_bytes(&self) -> Result<Writer, Error> {
-        let mut w = Writer::default();
-        w.u32(self.tx.ver); //版本
-        w.encode(&self.cache.refs); //引用hash
-        self.inv.encode_sign(&mut w)?; //输入
-        self.outv.encode_sign(&mut w)?; //引用的输出
-        w.encode(&self.cache.outs); //输出hash
-        Ok(w)
-    }
 }
 
 impl<'a> ExectorEnv for LinkExectorEnv<'a> {
     fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
-        let msg = self.get_sign_bytes()?;
+        let signer = FullSigner {};
+        let msg = signer.get_sign_bytes(self.cache, self.inv, self.outv)?;
         let acc: Account = ele.try_into()?;
         acc.verify(msg.bytes())
     }
@@ -755,7 +837,13 @@ impl BlkIndexer {
     }
     /// 添加交易到交易池
     pub fn append(&mut self, tx: &Tx) -> Result<Hasher, Error> {
+        let best = self.best()?;
+        //检测签名
+        self.check_tx_sign(tx)?;
+        //检测基本值
         tx.check_value(self)?;
+        //检测下个高度下金额是否正确
+        self.check_tx_amount(best.next(), &tx)?;
         let id = tx.id()?;
         let fee = self.get_tx_transaction_fee(tx)?;
         self.pool.push(tx, fee)?;
@@ -824,6 +912,9 @@ impl BlkIndexer {
         }
         //按所在区块高度从小到大排序
         coins.sort_by(|a, b| a.height.cmp(&b.height));
+        //加入交易池中的金额
+        let mut pcoins = self.pool.coins(acc)?;
+        coins.append(&mut pcoins);
         Ok(coins)
     }
     /// 获取属性信息
@@ -915,11 +1006,37 @@ impl BlkIndexer {
         }
         Ok(tfee)
     }
+    /// 检测交易签名
+    fn check_tx_sign(&mut self, tx: &Tx) -> Result<(), Error> {
+        //获取全签名器缓存
+        let signer = FullSigner {};
+        let cache = signer.get_sign_cache(&tx)?;
+        for inv in tx.ins.iter() {
+            //coinbase交易没有签名
+            if inv.is_coinbase() {
+                continue;
+            }
+            //获取引用的输出
+            let outv = self.get_txin_ref_txout(&inv)?;
+            //验证签名
+            let env = &LinkExectorEnv {
+                tx: &tx,
+                inv: &inv,
+                outv: &outv,
+                cache: &cache,
+            };
+            //连接输入输出脚本允许检测脚本
+            let mut script = inv.script.clone();
+            let script = script.concat(&outv.script);
+            let mut exector = Exector::new();
+            exector.exec(&script, env)?;
+        }
+        Ok(())
+    }
     /// 检测进入交易池的交易
     /// 返回tfee(交易费),cfee(coinbase输出)
     fn check_tx_amount(&mut self, height: u32, tx: &Tx) -> Result<(i64, i64), Error> {
         let (mut ofee, mut ifee, mut tfee, mut cfee) = (0, 0, 0, 0);
-        let cache = LinkExectorCache::new(&tx)?;
         for inv in tx.ins.iter() {
             //coinbase交易不包含金额信息
             if inv.is_coinbase() {
@@ -949,17 +1066,6 @@ impl BlkIndexer {
             }
             //消耗
             ifee += coin.value;
-            //验证签名
-            let env = &LinkExectorEnv {
-                tx: &tx,
-                inv: &inv,
-                outv: &outv,
-                cache: &cache,
-            };
-            let mut script = inv.script.clone();
-            let script = script.concat(&outv.script);
-            let mut exector = Exector::new();
-            exector.exec(&script, env)?;
         }
         for outv in tx.outs.iter() {
             if !consts::is_valid_amount(outv.value) {
@@ -1002,6 +1108,8 @@ impl BlkIndexer {
             return Error::msg("rfee  error");
         }
         for tx in blk.txs.iter() {
+            //检测交易签名
+            self.check_tx_sign(&tx)?;
             //检测交易金额,并返回交易费和coin输出金额(如果是coinbase交易)
             let (tfeev, cfeev) = self.check_tx_amount(height, &tx)?;
             //累加交易费
@@ -1305,6 +1413,15 @@ impl Chain {
         let tx = blk.get_tx(attr.idx as usize)?;
         Ok(tx.clone())
     }
+    /// 获取输入引用的输出
+    pub fn get_txin_ref_txout(&self, inv: &TxIn) -> Result<TxOut, Error> {
+        //获取对应的交易信息
+        let tx = self.get_tx(&inv.out.as_ref().into())?;
+        //获取对应的输出
+        let outv = tx.get_out(inv.idx as usize)?;
+        //复制返回
+        Ok(outv.clone())
+    }
     /// 从属性加载区块信息
     pub fn load(&self, attr: &BlkAttr) -> Result<Arc<Block>, Error> {
         self.do_write(|v| v.load(attr))
@@ -1329,10 +1446,6 @@ impl Chain {
     /// 从交易池移除交易
     pub fn remove(&self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.do_write(|v| v.remove(id))
-    }
-    /// 计算获取交易费
-    pub fn get_tx_transaction_fee(&self, tx: &Tx) -> Result<i64, Error> {
-        self.do_write(|v| v.get_tx_transaction_fee(tx))
     }
 }
 
@@ -1471,12 +1584,15 @@ fn test_tx_helper() {
         let best = idx.best()?;
         assert_eq!(best.height, 100);
         let mut helper = idx.new_helper();
+        //设置全签名器
+        helper.set_signer(Box::new(FullSigner {}))?;
+        //获取可用金额
         let coins = idx.coins(&acc)?;
         for coin in coins.iter() {
             if !coin.is_valid(best.next()) {
                 continue;
             }
-            //添加金额记录
+            //添加可用金额记录
             helper.add_coin(coin)?;
         }
         //height: 0 1 区块可用
@@ -1493,7 +1609,9 @@ fn test_tx_helper() {
         helper.set_cost_fee(1 * consts::COIN)?;
 
         let tx = Tx::try_from(&helper)?;
-        assert_eq!(1 * consts::COIN, idx.get_tx_transaction_fee(&tx)?);
+        //新交易放入交易池
+        let id = idx.append(&tx)?;
+        //从交易池拉取交易列表
 
         Ok(())
     });

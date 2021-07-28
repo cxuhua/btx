@@ -157,7 +157,7 @@ impl Exector {
     /// 执行脚本
     pub fn exec(&mut self, script: &Script, env: &impl ExectorEnv) -> Result<usize, Error> {
         //脚本过大
-        if script.len() > MAX_SCRIPT_SIZE {
+        if script.len() > MAX_SCRIPT_SIZE * 2 {
             return Error::msg("ScriptFmtErr");
         }
         let mut reader = script.reader();
