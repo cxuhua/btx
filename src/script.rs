@@ -196,7 +196,7 @@ impl Exector {
                         let v = reader.i64()? as i64;
                         self.eles.push(Ele::from(v));
                     }
-                    _ => return Error::msg("ScriptFmtErr"),
+                    _ => return Error::msg("OP_NUMBER"),
                 },
                 OP_DATA_1..=OP_DATA_4 => {
                     let d = Self::read_binary(&mut reader, op)?;
@@ -208,7 +208,7 @@ impl Exector {
                     let val: bool = self.top(-1).try_into()?;
                     self.pop(1)?;
                     if !val {
-                        return Error::msg("ScriptVerifyErr");
+                        return Error::msg("OP_VERIFY");
                     }
                 }
                 OP_HASHER => {
@@ -228,7 +228,7 @@ impl Exector {
                     //如果只验证true不放入结果到堆栈
                     if op == OP_EQUAL_VERIFY {
                         if !val {
-                            return Error::msg("ScriptVerifyErr");
+                            return Error::msg("OP_EQUAL_VERIFY");
                         }
                     } else {
                         self.eles.push(Ele::from(val));
@@ -250,7 +250,7 @@ impl Exector {
                     //如果只验证true不放入结果到堆栈
                     if op == OP_CHECKSIG_VERIFY {
                         if !val {
-                            return Error::msg("ScriptCheckSigErr");
+                            return Error::msg("OP_CHECKSIG_VERIFY");
                         }
                     } else {
                         self.eles.push(Ele::from(val));
@@ -259,10 +259,10 @@ impl Exector {
                 OP_VERIFY_INOUT => {
                     //检测是否为输入+输出脚本
                     if self.typs.len() != 2 {
-                        return Error::msg("ScriptExeErr");
+                        return Error::msg("OP_VERIFY_INOUT");
                     }
                     if self.typs != [SCRIPT_TYPE_IN, SCRIPT_TYPE_OUT] {
-                        return Error::msg("ScriptExeErr");
+                        return Error::msg("OP_VERIFY_INOUT");
                     }
                 }
                 _ => {
