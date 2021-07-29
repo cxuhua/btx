@@ -15,6 +15,7 @@ use bytes::BufMut;
 use core::hash;
 use db_key::Key;
 use lru::LruCache;
+use sha2::digest::BlockInput;
 use std::cmp::{Eq, PartialEq};
 use std::collections::btree_map;
 use std::collections::{BTreeMap, HashMap};
@@ -123,8 +124,11 @@ impl<'a> TryFrom<&TxHelper<'a>> for Tx {
 
 impl<'a> TxHelper<'a> {
     /// 设置交易版本
-    pub fn set_signer(&mut self, signer: Box<dyn TxSigner>) -> Result<&mut Self, Error> {
-        self.signer = Some(signer);
+    pub fn set_signer<S>(&mut self, signer: S) -> Result<&mut Self, Error>
+    where
+        S: TxSigner + 'static,
+    {
+        self.signer = Some(Box::new(signer));
         Ok(self)
     }
     /// 设置找零账户hasher
@@ -737,10 +741,23 @@ pub trait TxSigner {
         }
         Ok(())
     }
+    /// 验签,acc需要包含公钥
+    fn verify_tx(
+        &self,
+        cache: &LinkExectorCache,
+        inv: &TxIn,
+        outv: &TxOut,
+        acc: &Account,
+    ) -> Result<bool, Error>;
 }
 
-/// 全签名验证器
+/// 全签名验签处理
 pub struct FullSigner {}
+
+//根据当前交易获取签名验签
+pub fn new_tx_signer(_ctx: &mut BlkIndexer, _tx: &Tx) -> Box<dyn TxSigner> {
+    Box::new(FullSigner {})
+}
 
 impl TxSigner for FullSigner {
     /// 获取带签名的输入脚本
@@ -766,22 +783,32 @@ impl TxSigner for FullSigner {
         //返回包含签名的脚本
         Script::new_script_in(&acc)
     }
+    /// 验签,acc需要包含公钥
+    fn verify_tx(
+        &self,
+        cache: &LinkExectorCache,
+        inv: &TxIn,
+        outv: &TxOut,
+        acc: &Account,
+    ) -> Result<bool, Error> {
+        let msg = self.get_sign_bytes(cache, inv, outv)?;
+        acc.verify_full(msg.bytes())
+    }
 }
 
 /// 区块链接脚本执行签名验证
 struct LinkExectorEnv<'a> {
-    tx: &'a Tx,                  //当前交易
-    inv: &'a TxIn,               //当前输入
-    outv: &'a TxOut,             //输入引用的输出
-    cache: &'a LinkExectorCache, //执行交易缓存
+    tx: &'a Tx,                    //当前交易
+    inv: &'a TxIn,                 //当前输入
+    outv: &'a TxOut,               //输入引用的输出
+    cache: &'a LinkExectorCache,   //执行交易缓存
+    singer: Box<&'a dyn TxSigner>, //签名验签
 }
 
 impl<'a> ExectorEnv for LinkExectorEnv<'a> {
     fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
-        let signer = FullSigner {};
-        let msg = signer.get_sign_bytes(self.cache, self.inv, self.outv)?;
         let acc: Account = ele.try_into()?;
-        acc.verify(msg.bytes())
+        self.singer.verify_tx(self.cache, self.inv, self.outv, &acc)
     }
 }
 
@@ -841,11 +868,11 @@ impl BlkIndexer {
     }
     /// 添加交易到交易池
     pub fn append(&mut self, tx: &Tx) -> Result<Hasher, Error> {
+        //检测基本值
+        tx.check_value(self)?;
         let best = self.best()?;
         //检测签名
         self.check_tx_sign(tx)?;
-        //检测基本值
-        tx.check_value(self)?;
         //检测下个高度下金额是否正确
         self.check_tx_amount(best.next(), &tx)?;
         let id = tx.id()?;
@@ -1012,8 +1039,8 @@ impl BlkIndexer {
     }
     /// 检测交易签名
     fn check_tx_sign(&mut self, tx: &Tx) -> Result<(), Error> {
-        //获取全签名器缓存
-        let signer = FullSigner {};
+        //获取签名器缓存
+        let signer = new_tx_signer(self, tx);
         let cache = signer.get_sign_cache(&tx)?;
         for inv in tx.ins.iter() {
             //coinbase交易没有签名
@@ -1022,12 +1049,13 @@ impl BlkIndexer {
             }
             //获取引用的输出
             let outv = self.get_txin_ref_txout(&inv)?;
-            //验证签名
+            //验证签名环境
             let env = &LinkExectorEnv {
                 tx: &tx,
                 inv: &inv,
                 outv: &outv,
                 cache: &cache,
+                singer: Box::new(&*signer),
             };
             //连接输入输出脚本允许检测脚本
             let mut script = inv.script.clone();
@@ -1205,6 +1233,7 @@ impl BlkIndexer {
                 idx: i as u16,   //在区块的位置
             };
             batch.put(&txid.into(), &txattr);
+            //写入交易金额
             self.write_tx_index(&mut batch, &next, &tx)?;
         }
         //id对应的区块头属性
@@ -1219,10 +1248,11 @@ impl BlkIndexer {
         //写二进制数据(区块内容和回退数据)
         attr.blk = self.blk.push(blkwb.bytes())?;
         attr.rev = self.rev.push(revwb.bytes())?;
-        //写入区块id对应的区块头属性,这个不会包含在回退数据中,回退时删除数据
+        //写入区块id对应的区块头属性,这个不会包含在回退数据中
         batch.put(key, &attr);
         //批量写入
         self.leveldb.write(&batch, true)?;
+        //连接成功将交易池中有的交易移除
         Ok(next)
     }
     /// 获取交易信息
@@ -1589,7 +1619,7 @@ fn test_tx_helper() {
         assert_eq!(best.height, 100);
         let mut helper = idx.new_helper();
         //设置全签名器
-        helper.set_signer(Box::new(FullSigner {}))?;
+        helper.set_signer(FullSigner {})?;
         //获取可用金额
         let coins = idx.coins(&acc)?;
         for coin in coins.iter() {

@@ -23,7 +23,7 @@ pub trait Checker: Sized {
 /// 最高区块描述
 #[derive(Debug)]
 pub struct Best {
-    pub id: Hasher,  //区块id
+    pub id: Hasher,  //顶部区块id
     pub height: u32, //区块高度
 }
 
@@ -67,6 +67,7 @@ impl Serializer for Best {
         Ok(value)
     }
 }
+
 /// 交易存储属性
 #[derive(Debug)]
 pub struct TxAttr {
@@ -1099,7 +1100,7 @@ fn test_base_inout_script() {
     impl ExectorEnv for TestEnv {
         fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
             let acc: Account = ele.try_into()?;
-            acc.verify("aaa".as_bytes())
+            acc.verify_full("aaa".as_bytes())
         }
     }
     let env = &TestEnv {};

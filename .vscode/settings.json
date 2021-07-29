@@ -1,0 +1,9 @@
+{
+    "editor.semanticTokenColorCustomizations": {
+        "rules": {
+            "*.mutable": {
+                "fontStyle": "bold", // underline is the default
+            },
+        }
+    }
+}

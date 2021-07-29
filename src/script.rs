@@ -286,7 +286,7 @@ struct TestEnv;
 impl ExectorEnv for TestEnv {
     fn verify_sign(&self, ele: &Ele) -> Result<bool, Error> {
         let a: Account = ele.try_into()?;
-        a.verify("aaa".as_bytes())
+        a.verify_full("aaa".as_bytes())
     }
 }
 

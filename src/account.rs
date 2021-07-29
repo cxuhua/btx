@@ -14,13 +14,13 @@ use std::sync::Arc;
 pub trait AccountPool: Sync + Send {
     /// 获取指定的账户
     fn account(&self, id: &str) -> Result<Arc<Account>, errors::Error>;
-    /// 列出所有账户
+    /// 列出所有账户地址
     fn list_keys(&self) -> &Vec<String>;
-    /// 获取总数
+    /// 获取账户总数
     fn len(&self) -> usize;
     /// 按索引获取账户
     fn value(&self, idx: usize) -> Result<Arc<Account>, errors::Error>;
-    /// 按索引获取key
+    /// 按索引获取账户地址
     fn key(&self, idx: usize) -> Result<&String, errors::Error>;
 }
 
@@ -524,7 +524,7 @@ impl Account {
     }
     /// 标准验签
     /// msg数据为签名数据,不需要进行hash,签名时会进行一次Hasher::hash*
-    pub fn verify(&self, msg: &[u8]) -> Result<bool, errors::Error> {
+    pub fn verify_full(&self, msg: &[u8]) -> Result<bool, errors::Error> {
         //检测账户是否包含公钥
         if !self.check_with_pubs() {
             return errors::Error::msg("verify sign error, check_with_pubs ");
@@ -577,7 +577,7 @@ fn test_account_verify_true() {
     let mut acc = Account::new(5, 2, false, true).unwrap();
     acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
     acc.sign_with_index(1, "aaa".as_bytes()).unwrap();
-    assert_eq!(true, acc.verify("aaa".as_bytes()).unwrap());
+    assert_eq!(true, acc.verify_full("aaa".as_bytes()).unwrap());
 }
 
 #[test]
@@ -585,5 +585,5 @@ fn test_account_verify_false() {
     let mut acc = Account::new(5, 2, false, true).unwrap();
     acc.sign_with_index(0, "aaa".as_bytes()).unwrap();
     acc.sign_with_index(1, "bbb".as_bytes()).unwrap();
-    assert_eq!(false, acc.verify("aaa".as_bytes()).unwrap());
+    assert_eq!(false, acc.verify_full("aaa".as_bytes()).unwrap());
 }
