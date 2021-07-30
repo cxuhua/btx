@@ -15,7 +15,6 @@ use bytes::BufMut;
 use core::hash;
 use db_key::Key;
 use lru::LruCache;
-use sha2::digest::BlockInput;
 use std::cmp::{Eq, PartialEq};
 use std::collections::btree_map;
 use std::collections::{BTreeMap, HashMap};
@@ -39,6 +38,110 @@ impl TxOutEle {
             value: coin,
             addr: addr.into(),
         }
+    }
+}
+
+/// 区块助手
+/// 生成基本区块信息
+pub struct BlkHelper<'a> {
+    ver: u16,            //区块版本
+    outs: Vec<TxOutEle>, //输出金额
+    ctx: &'a Chain,      //链对象
+    cbstr: String,       //coinbase信息
+    txs: Vec<Arc<Tx>>,   //相关交易
+}
+
+impl<'a> BlkHelper<'a> {
+    /// 设置交易费
+    pub fn set_cbstr(&mut self, cbstr: &str) -> Result<&mut Self, Error> {
+        self.cbstr = cbstr.into();
+        Ok(self)
+    }
+    /// 设置输出
+    pub fn set_outs(&mut self, eles: &Vec<TxOutEle>) -> Result<&mut Self, Error> {
+        self.outs = eles.clone();
+        Ok(self)
+    }
+    /// 添加输出
+    pub fn add_out(&mut self, addr: &str, coin: i64) -> Result<&mut Self, Error> {
+        self.outs.push(TxOutEle {
+            addr: addr.into(),
+            value: coin,
+        });
+        Ok(self)
+    }
+    /// 设置交易
+    pub fn set_txs(&mut self, eles: &Vec<Arc<Tx>>) -> Result<&mut Self, Error> {
+        self.txs = eles.clone();
+        Ok(self)
+    }
+    /// 添加交易
+    pub fn add_tx(&mut self, tx: Arc<Tx>) -> Result<&mut Self, Error> {
+        self.txs.push(tx.clone());
+        Ok(self)
+    }
+    /// 设置交易版本
+    pub fn set_ver(&mut self, ver: u16) -> Result<&mut Self, Error> {
+        self.ver = ver;
+        Ok(self)
+    }
+    pub fn new(ctx: &'a Chain) -> Self {
+        BlkHelper {
+            ver: 1,
+            outs: vec![],
+            ctx: ctx,
+            cbstr: "".into(),
+            txs: vec![],
+        }
+    }
+}
+
+//创建下个区块
+impl<'a> TryFrom<&BlkHelper<'a>> for Block {
+    type Error = Error;
+    fn try_from(helper: &BlkHelper<'a>) -> Result<Self, Self::Error> {
+        let (bits, height, prev) = helper.ctx.next()?;
+        //初始化区块头
+        let mut blk = Block::default();
+        blk.header.bits = bits;
+        blk.header.nonce = util::rand_u32();
+        blk.header.set_now_time();
+        blk.header.set_ver(helper.ver);
+        blk.header.prev = prev;
+        blk.hhv = height;
+        let mut cb = Tx::default();
+        cb.ver = helper.ver as u32;
+        //coinbase交易输入
+        let mut inv = TxIn::default();
+        inv.out = Hasher::zero();
+        inv.idx = 0;
+        inv.script = Script::new_script_cb(height, helper.cbstr.as_bytes())?;
+        inv.seq = 0;
+        cb.ins.push(inv);
+        //coinbase输出
+        for ele in helper.outs.iter() {
+            if ele.value == 0 {
+                continue;
+            }
+            let addr = Account::decode(&ele.addr)?;
+            let mut outv = TxOut::default();
+            outv.value = ele.value;
+            outv.script = Script::new_script_out(&addr)?;
+            cb.outs.push(outv);
+        }
+        //添加第一个coinbase交易
+        blk.txs.push(cb);
+        //添加其他交易并检测区块大小
+        let mut size: usize = blk.get_size();
+        for tx in helper.txs.iter() {
+            size += tx.get_size();
+            if size > consts::MAX_BLOCK_SIZE {
+                return Error::msg("block size > MAX_BLOCK_SIZE");
+            }
+            blk.txs.push((**tx).clone());
+        }
+        blk.finish()?;
+        Ok(blk)
     }
 }
 
@@ -623,7 +726,8 @@ fn test_coin_attr_key_value() {
 #[test]
 fn test_block_index_coin_save() {
     Config::test(|conf, idx| {
-        let acc = conf.acc.as_ref().unwrap();
+        let accpool = idx.get_account_pool()?;
+        let acc = accpool.value(2)?;
         //只加入的genesis区块
         let best = idx.best()?;
         assert_eq!(best.id, conf.genesis);
@@ -634,7 +738,7 @@ fn test_block_index_coin_save() {
         assert_eq!(coins[0].flags, 1);
         assert_eq!(coins[0].height, 0);
         //链接一个新的区块
-        let blk = idx.new_block("second", |_| Ok(()))?;
+        let blk = idx.new_block("second", &acc.string()?)?;
         let best = idx.link(&blk)?;
         assert_eq!(best.height, 1);
         let coins = idx.coins(&acc)?;
@@ -817,29 +921,27 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
 ///       --- block 区块内容目录 store存储
 ///       --- index 索引目录,金额记录,区块头 leveldb
 impl BlkIndexer {
+    /// 设置上帝区块id
+    fn set_genesis_id(&mut self, id: &Hasher) -> Result<(), Error> {
+        match self.best() {
+            Ok(_) => Error::msg("block indexer has blocks"),
+            Err(_) => {
+                self.conf.genesis = id.clone();
+                Ok(())
+            }
+        }
+    }
     /// 获取账户池
-    pub fn get_account_pool(&self) -> Result<Arc<dyn AccountPool>, Error> {
+    fn get_account_pool(&self) -> Result<Arc<dyn AccountPool>, Error> {
         match &self.acp {
             Some(acp) => Ok(acp.clone()),
             None => Error::msg("acc pool miss"),
         }
     }
     /// 设置账户池对象
-    pub fn set_account_pool(&mut self, acp: Arc<dyn AccountPool>) -> Result<(), Error> {
+    fn set_account_pool(&mut self, acp: Arc<dyn AccountPool>) -> Result<(), Error> {
         self.acp = Some(acp);
         Ok(())
-    }
-    /// 创建下个区块
-    /// 保证第一个区块已经链接到链
-    /// cbstr: coinbase区块自定义信息
-    pub fn new_block<F>(&mut self, cbstr: &str, ff: F) -> Result<Block, Error>
-    where
-        F: FnOnce(&mut Block) -> Result<(), Error>,
-    {
-        let best = self.best()?;
-        let height = best.next();
-        let bits = self.next_bits()?;
-        self.conf.create_block(best.id, height, bits, cbstr, ff)
     }
     /// 每个文件最大大小
     const MAX_FILE_SIZE: u32 = 1024 * 1024 * 512;
@@ -867,7 +969,7 @@ impl BlkIndexer {
         })
     }
     /// 添加交易到交易池
-    pub fn append(&mut self, tx: &Tx) -> Result<Hasher, Error> {
+    fn append(&mut self, tx: &Tx) -> Result<Hasher, Error> {
         //检测基本值
         tx.check_value(self)?;
         let best = self.best()?;
@@ -881,49 +983,50 @@ impl BlkIndexer {
         Ok(id)
     }
     /// 从交易池移除交易
-    pub fn remove(&mut self, id: &Hasher) -> Result<Arc<Tx>, Error> {
+    fn remove(&mut self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.pool.remove(id)
     }
     /// 获取当前配置
-    pub fn config(&self) -> &Config {
+    fn config(&self) -> &Config {
         &self.conf
     }
     /// 获取最高区块信息
     /// 不存在应该是没有区块记录
-    pub fn best(&self) -> Result<Best, Error> {
+    fn best(&self) -> Result<Best, Error> {
         let key: IKey = Self::BEST_KEY.into();
         self.leveldb.get(&key)
     }
-    /// 下个区块的高度
-    pub fn next_height(&self) -> u32 {
-        self.best().map_or(0, |v| v.height + 1)
-    }
-    /// 获取下个区块难度
-    pub fn next_bits(&mut self) -> Result<u32, Error> {
-        let best = self.best();
-        if best.is_err() {
-            return Ok(self.conf.pow_limit.compact());
+    /// 获取下个区块 难度,高度,当前区块id
+    fn next(&mut self) -> Result<(u32, u32, Hasher), Error> {
+        let conf = &self.conf;
+        let limit = conf.pow_limit.compact();
+        match self.best() {
+            Ok(best) => {
+                //获取下个高度
+                let next = best.next();
+                if best.height == 0 {
+                    return Ok((limit, next, best.id.clone()));
+                }
+                //最后一个区块的信息
+                let last: BlkAttr = self.attr(&best.id.as_ref().into())?;
+                if next % conf.pow_span != 0 {
+                    return Ok((last.bhv.bits, next, best.id.clone()));
+                }
+                let prev = next - conf.pow_span;
+                let prev: BlkAttr = self.attr(&prev.into())?;
+                let ct = last.bhv.get_timestamp();
+                let pt = prev.bhv.get_timestamp();
+                //计算下个工作难度
+                let bits = conf
+                    .pow_limit
+                    .compute_bits(conf.pow_time, ct, pt, last.bhv.bits);
+                Ok((bits, next, best.id.clone()))
+            }
+            Err(_) => Ok((limit, 0, Hasher::zero())),
         }
-        let best = best.unwrap();
-        if best.height == 0 {
-            return Ok(self.conf.pow_limit.compact());
-        }
-        let last: BlkAttr = self.attr(&best.id.as_ref().into())?;
-        let next = best.next();
-        if next % self.conf.pow_span != 0 {
-            return Ok(last.bhv.bits);
-        }
-        let prev = next - self.conf.pow_span;
-        let prev: BlkAttr = self.attr(&prev.into())?;
-        let ct = last.bhv.get_timestamp();
-        let pt = prev.bhv.get_timestamp();
-        Ok(self
-            .conf
-            .pow_limit
-            .compute_bits(self.conf.pow_time, ct, pt, last.bhv.bits))
     }
     /// 获取账户对应的金额列表
-    pub fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
+    fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
         let mut coins: Vec<CoinAttr> = vec![];
         let hash = acc.get_address()?;
         let akey: IKey = hash.as_ref().into();
@@ -949,7 +1052,7 @@ impl BlkIndexer {
         Ok(coins)
     }
     /// 获取属性信息
-    pub fn attr<T>(&self, k: &IKey) -> Result<T, Error>
+    fn attr<T>(&self, k: &IKey) -> Result<T, Error>
     where
         T: Serializer + Default,
     {
@@ -977,7 +1080,7 @@ impl BlkIndexer {
     }
     /// 从索引中获取区块
     /// 获取的区块只能读取
-    pub fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
+    fn get(&mut self, k: &IKey) -> Result<Arc<Block>, Error> {
         //u32 height读取,对应一个hashid
         if k.is_height_key() {
             let ref ik: Hasher = self.leveldb.get(k)?;
@@ -1002,7 +1105,7 @@ impl BlkIndexer {
         self.cache.put(k, &blk)
     }
     /// 获取交易费用
-    pub fn get_tx_transaction_fee(&mut self, tx: &Tx) -> Result<i64, Error> {
+    fn get_tx_transaction_fee(&mut self, tx: &Tx) -> Result<i64, Error> {
         let (mut ofee, mut ifee, mut tfee) = (0, 0, 0);
         //coinbase没有交易费
         if tx.is_coinbase() {
@@ -1030,7 +1133,7 @@ impl BlkIndexer {
         Ok(tfee)
     }
     /// 获取区块交易费,不检测区块有效性,引用的coin可能已经被消费了,只计算金额
-    pub fn get_block_transaction_fee(&mut self, blk: &Block) -> Result<i64, Error> {
+    fn get_block_transaction_fee(&mut self, blk: &Block) -> Result<i64, Error> {
         let mut tfee = 0;
         for tx in blk.txs.iter() {
             tfee += self.get_tx_transaction_fee(&tx)?;
@@ -1128,6 +1231,31 @@ impl BlkIndexer {
         }
         Ok((tfee, cfee))
     }
+    /// 计算区块工作难度
+    fn compute_block_bits(&self, blk: &mut Block) -> Result<(), Error> {
+        let mut id = blk.id()?;
+        let mut count = 0;
+        //验证工作难度
+        while !id.verify_pow(&self.conf.pow_limit, blk.header.bits) && count < 1024 * 1024 {
+            blk.header.nonce += 1;
+            id = blk.id()?;
+            count += 1;
+        }
+        if !id.verify_pow(&self.conf.pow_limit, blk.header.bits) {
+            return Error::msg("compute pow failed");
+        }
+        Ok(())
+    }
+    /// 计算某高度下的奖励
+    fn compute_reward(&self, h: u32) -> Result<i64, Error> {
+        let hlv = h / self.conf.halving;
+        if hlv >= 64 {
+            return Ok(0);
+        }
+        let mut n = 50 * consts::COIN;
+        n >>= hlv;
+        Ok(n)
+    }
     /// 检测区块的金额
     /// 这个检测的区块是新连入的区块,需要检测引用的coin是否在链中
     /// 并且检测签名是否正确
@@ -1135,7 +1263,7 @@ impl BlkIndexer {
         //coinbase输出，输入, 输出, 交易费, 区块奖励
         //1.每个交易的输出<=输入,差值就是交易费用，可包含在coinbase输出中
         //3.coinbase输出 <= (区块奖励+交易费)
-        let (mut cfee, mut tfee, rfee) = (0, 0, self.conf.compute_reward(height));
+        let (mut cfee, mut tfee, rfee) = (0, 0, self.compute_reward(height)?);
         if !consts::is_valid_amount(rfee) {
             return Error::msg("rfee  error");
         }
@@ -1171,7 +1299,7 @@ impl BlkIndexer {
     /// block id->block attr 区块id对应的区块信息
     /// blk data 区块数据
     /// rev data 回退数据
-    pub fn link(&mut self, blk: &Block) -> Result<Best, Error> {
+    fn link(&mut self, blk: &Block) -> Result<Best, Error> {
         //检测基本数据
         blk.check_value(self)?;
         let id = blk.id()?;
@@ -1184,16 +1312,16 @@ impl BlkIndexer {
             return Error::msg("block bits error");
         }
         //计算并检测下个区块难度,当前链入的区块难度应该和计算出来的一致
-        let bits = self.next_bits()?;
+        let (bits, height, _) = self.next()?;
         if blk.header.bits != bits {
             return Error::msg("link block bits error");
         }
         //开始写入
         let mut batch = IBatch::new(true);
         //最新best数据
-        let mut next = Best {
+        let next = Best {
             id: id.clone(),
-            height: u32::MAX,
+            height: height,
         };
         //获取顶部区块
         match self.best() {
@@ -1204,7 +1332,6 @@ impl BlkIndexer {
                 if blk.header.prev != prev.id()? {
                     return Error::msg("block prev != prev.id");
                 }
-                next.height = top.next();
                 //写入新的并保存旧的到回退数据
                 batch.set(&Self::BEST_KEY.into(), &next, &top);
             }
@@ -1213,7 +1340,6 @@ impl BlkIndexer {
                 if id != self.conf.genesis {
                     return Error::msg("first block not config genesis");
                 }
-                next.height = 0;
                 batch.put(&Self::BEST_KEY.into(), &next);
             }
         }
@@ -1253,6 +1379,12 @@ impl BlkIndexer {
         //批量写入
         self.leveldb.write(&batch, true)?;
         //连接成功将交易池中有的交易移除
+        for tx in blk.txs.iter() {
+            let txid = tx.id()?;
+            //无条件移除
+            let _ = self.pool.remove(&txid);
+        }
+        //发送成功连接区块通知!!!
         Ok(next)
     }
     /// 获取交易信息
@@ -1278,7 +1410,7 @@ impl BlkIndexer {
         Ok(outv.clone())
     }
     /// 获取输入引用的金额
-    pub fn get_txin_ref_coin(&mut self, inv: &TxIn) -> Result<CoinAttr, Error> {
+    fn get_txin_ref_coin(&mut self, inv: &TxIn) -> Result<CoinAttr, Error> {
         //获取交易对应的存储属性
         let attr: TxAttr = self.attr(&inv.out.as_ref().into())?;
         //获取区块信息
@@ -1303,7 +1435,7 @@ impl BlkIndexer {
     /// acc: 账户hash id
     /// tx:交易hash id
     /// idx:输出未知
-    pub fn get_coin(&mut self, acc: &Hasher, tx: &Hasher, idx: u16) -> Result<CoinAttr, Error> {
+    fn get_coin(&mut self, acc: &Hasher, tx: &Hasher, idx: u16) -> Result<CoinAttr, Error> {
         //如果已经在交易池中
         let mut coin = CoinAttr::default();
         coin.cpk = acc.clone();
@@ -1356,7 +1488,7 @@ impl BlkIndexer {
     }
     /// 回退一个区块,回退多个连续调用此方法
     /// 返回被回退的区块
-    pub fn pop(&mut self) -> Result<Block, Error> {
+    fn pop(&mut self) -> Result<Block, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
         if best.id == self.conf.genesis {
@@ -1384,24 +1516,42 @@ impl BlkIndexer {
 pub struct Chain(RwLock<BlkIndexer>);
 
 impl Chain {
+    /// 计算某高度下的奖励
+    pub fn compute_reward(&self, h: u32) -> Result<i64, Error> {
+        self.do_read(|v| v.compute_reward(h))
+    }
+    /// 计算区块工作难度
+    pub fn compute_block_bits(&self, blk: &mut Block) -> Result<(), Error> {
+        self.do_read(|v| v.compute_block_bits(blk))
+    }
+    /// 设置第一个区块,只有空链才能设置
+    pub fn set_genesis_id(&self, id: &Hasher) -> Result<(), Error> {
+        self.do_write(|v| v.set_genesis_id(id))
+    }
     /// 获取账户池
     pub fn get_account_pool(&self) -> Result<Arc<dyn AccountPool>, Error> {
         self.do_read(|v| v.get_account_pool())
     }
-    /// 设置账户池
-    pub fn set_account_pool(&self, acp: Arc<dyn AccountPool>) -> Result<(), Error> {
-        self.do_write(|v| v.set_account_pool(acp))
-    }
     /// 创建交易助手
-    pub fn new_helper<'a>(&'a self) -> TxHelper<'a> {
+    pub fn new_tx_helper<'a>(&'a self) -> TxHelper<'a> {
         TxHelper::new(self)
     }
-    /// 从当前链顶创建一个新区块
-    pub fn new_block<F>(&self, cbstr: &str, ff: F) -> Result<Block, Error>
-    where
-        F: FnOnce(&mut Block) -> Result<(), Error>,
-    {
-        self.do_write(|v| v.new_block(cbstr, ff))
+    /// 创建区块助手
+    pub fn new_blk_helper<'a>(&'a self) -> BlkHelper<'a> {
+        BlkHelper::new(self)
+    }
+    /// 从当前链顶创建一个新区块只包含coinbase交易
+    pub fn new_block(&self, cbstr: &str, addr: &str) -> Result<Block, Error> {
+        let conf = self.config()?;
+        let mut helper = self.new_blk_helper();
+        helper.set_ver(conf.ver)?;
+        helper.set_cbstr(cbstr)?;
+        //奖励给acc
+        helper.add_out(addr, self.compute_reward(0)?)?;
+        //创建并计算工作难度
+        let mut blk = Block::try_from(&helper)?;
+        self.compute_block_bits(&mut blk)?;
+        Ok(blk)
     }
     /// lock read process
     fn do_read<R, F>(&self, f: F) -> Result<R, Error>
@@ -1422,12 +1572,18 @@ impl Chain {
         self.do_read(|v| Ok(v.config().clone()))
     }
     /// 创建指定路径存储的链
-    pub fn new(conf: &Config) -> Result<Self, Error> {
-        Ok(Chain(RwLock::new(BlkIndexer::new(conf)?)))
+    pub fn new(conf: &Config, acp: Arc<dyn AccountPool>) -> Result<Self, Error> {
+        let chain = Chain(RwLock::new(BlkIndexer::new(conf)?));
+        chain.do_write(|v| v.set_account_pool(acp))?;
+        Ok(chain)
     }
     /// 获取区块链顶部信息
     pub fn best(&self) -> Result<Best, Error> {
         self.do_read(|v| v.best())
+    }
+    /// 结算下个难度
+    pub fn next(&self) -> Result<(u32, u32, Hasher), Error> {
+        self.do_write(|v| v.next())
     }
     /// 获取属性信息,不缓存
     pub fn attr<T>(&self, k: &IKey) -> Result<T, Error>
@@ -1491,8 +1647,10 @@ fn test_indexer_thread() {
         let indexer = Arc::new(idx);
         for _ in 0..10 {
             let idx = indexer.clone();
+            let accpool = idx.get_account_pool().unwrap();
             thread::spawn(move || {
-                let b1 = idx.new_block("", |_| Ok(())).unwrap();
+                let acc = accpool.value(0).unwrap();
+                let b1 = idx.new_block("", &acc.string().unwrap()).unwrap();
                 idx.link(&b1).unwrap();
                 let id = b1.id().unwrap();
                 let b2 = idx.get(&id.as_ref().into()).unwrap();
@@ -1507,10 +1665,12 @@ fn test_indexer_thread() {
 #[test]
 fn test_simple_link_pop() {
     Config::test(|conf, idx| {
+        let accpool = idx.get_account_pool()?;
+        let acc = accpool.value(0)?;
         let best = idx.best()?;
         assert_eq!(0, best.height);
         for _ in 0u32..=10 {
-            let b1 = idx.new_block("", |_| Ok(()))?;
+            let b1 = idx.new_block("", &acc.string()?)?;
             idx.link(&b1)?;
         }
         let best = idx.best()?;
@@ -1607,17 +1767,19 @@ fn test_lru_cache() {
 fn test_tx_helper() {
     use crate::config::Config;
     use crate::consts;
-    Config::test(|conf, idx| {
+    Config::test(|_, idx| {
+        //获取账户池
+        let accpool = idx.get_account_pool()?;
         //这个账户有钱
-        let acc = conf.acc.as_ref().unwrap();
+        let acc = accpool.value(2)?;
         //创建100个区块
         for _ in 0..consts::COINBASE_MATURITY {
-            let b = idx.new_block("", |_| Ok(()))?;
+            let b = idx.new_block("", &acc.string()?)?;
             idx.link(&b)?;
         }
         let best = idx.best()?;
         assert_eq!(best.height, 100);
-        let mut helper = idx.new_helper();
+        let mut helper = idx.new_tx_helper();
         //设置全签名器
         helper.set_signer(FullSigner {})?;
         //获取可用金额
@@ -1631,8 +1793,7 @@ fn test_tx_helper() {
         }
         //height: 0 1 区块可用
         assert_eq!(helper.coins.len(), 2);
-        //获取账户池
-        let accpool = idx.get_account_pool()?;
+
         //账户1转10*COIN
         let acc1 = accpool.value(0)?;
         helper.add_out(&acc1.string()?, 10 * consts::COIN)?;

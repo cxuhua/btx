@@ -26,8 +26,3 @@ pub fn init() {
         .filter(Some("btx"), log::LevelFilter::Trace)
         .init();
 }
-
-#[tokio::test]
-async fn test_tokio() {
-    assert_eq!(true, true);
-}

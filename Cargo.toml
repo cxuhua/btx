@@ -31,6 +31,6 @@ config = "0.11.0"
 lru = "0.6.5"
 db-key = "0.0.5"
 lazy_static = "1.4.0"
-redis = { version = "0.21.0", features = ["tokio-comp"] }
-tokio = { version = "1.9.0", features = ["full"] }
-hyper = { version = "0.14", features = ["full"] }
+# redis = { version = "0.21.0", features = ["tokio-comp"] }
+# tokio = { version = "1.9.0", features = ["full"] }
+# hyper = { version = "0.14", features = ["full"] }
