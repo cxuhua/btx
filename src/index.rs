@@ -44,7 +44,6 @@ impl TxOutEle {
 /// 区块助手
 /// 生成基本区块信息
 pub struct BlkHelper<'a> {
-    ver: u16,            //区块版本
     outs: Vec<TxOutEle>, //输出金额
     ctx: &'a Chain,      //链对象
     cbstr: String,       //coinbase信息
@@ -80,14 +79,8 @@ impl<'a> BlkHelper<'a> {
         self.txs.push(tx.clone());
         Ok(self)
     }
-    /// 设置交易版本
-    pub fn set_ver(&mut self, ver: u16) -> Result<&mut Self, Error> {
-        self.ver = ver;
-        Ok(self)
-    }
     pub fn new(ctx: &'a Chain) -> Self {
         BlkHelper {
-            ver: 1,
             outs: vec![],
             ctx: ctx,
             cbstr: "".into(),
@@ -100,17 +93,19 @@ impl<'a> BlkHelper<'a> {
 impl<'a> TryFrom<&BlkHelper<'a>> for Block {
     type Error = Error;
     fn try_from(helper: &BlkHelper<'a>) -> Result<Self, Self::Error> {
+        let conf = helper.ctx.config()?;
+        //下个难度和高度,当前id
         let (bits, height, prev) = helper.ctx.next()?;
         //初始化区块头
         let mut blk = Block::default();
         blk.header.bits = bits;
         blk.header.nonce = util::rand_u32();
         blk.header.set_now_time();
-        blk.header.set_ver(helper.ver);
+        blk.header.set_ver(conf.ver);
         blk.header.prev = prev;
         blk.hhv = height;
         let mut cb = Tx::default();
-        cb.ver = helper.ver as u32;
+        cb.ver = conf.ver as u32;
         //coinbase交易输入
         let mut inv = TxIn::default();
         inv.out = Hasher::zero();
@@ -1542,13 +1537,9 @@ impl Chain {
     }
     /// 从当前链顶创建一个新区块只包含coinbase交易
     pub fn new_block(&self, cbstr: &str, addr: &str) -> Result<Block, Error> {
-        let conf = self.config()?;
         let mut helper = self.new_blk_helper();
-        helper.set_ver(conf.ver)?;
         helper.set_cbstr(cbstr)?;
-        //奖励给acc
         helper.add_out(addr, self.compute_reward(0)?)?;
-        //创建并计算工作难度
         let mut blk = Block::try_from(&helper)?;
         self.compute_block_bits(&mut blk)?;
         Ok(blk)
@@ -1779,9 +1770,9 @@ fn test_tx_helper() {
         }
         let best = idx.best()?;
         assert_eq!(best.height, 100);
-        let mut helper = idx.new_tx_helper();
+        let mut txh = idx.new_tx_helper();
         //设置全签名器
-        helper.set_signer(FullSigner {})?;
+        txh.set_signer(FullSigner {})?;
         //获取可用金额
         let coins = idx.coins(&acc)?;
         for coin in coins.iter() {
@@ -1789,21 +1780,20 @@ fn test_tx_helper() {
                 continue;
             }
             //添加可用金额记录
-            helper.add_coin(coin)?;
+            txh.add_coin(coin)?;
         }
         //height: 0 1 区块可用
-        assert_eq!(helper.coins.len(), 2);
-
+        assert_eq!(txh.coins.len(), 2);
         //账户1转10*COIN
         let acc1 = accpool.value(0)?;
-        helper.add_out(&acc1.string()?, 10 * consts::COIN)?;
+        txh.add_out(&acc1.string()?, 10 * consts::COIN)?;
         //账户2转20*COIN
         let acc2 = accpool.value(1)?;
-        helper.add_out(&acc2.string()?, 20 * consts::COIN)?;
+        txh.add_out(&acc2.string()?, 20 * consts::COIN)?;
         //交易费
-        helper.set_cost_fee(1 * consts::COIN)?;
+        txh.set_cost_fee(1 * consts::COIN)?;
 
-        let tx = Tx::try_from(&helper)?;
+        let tx = Tx::try_from(&txh)?;
         //新交易放入交易池
         let id = idx.append(&tx)?;
         //从交易池拉取交易列表
