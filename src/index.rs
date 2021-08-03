@@ -43,14 +43,29 @@ impl TxOutEle {
 
 /// 区块助手
 /// 生成基本区块信息
-pub struct BlkHelper<'a> {
+pub struct BlkHelper {
+    ver: u16,
     outs: Vec<TxOutEle>, //输出金额
-    ctx: &'a Chain,      //链对象
     cbstr: String,       //coinbase信息
     txs: Vec<Arc<Tx>>,   //相关交易
+    bits: u32,           //当前难度
+    height: u32,         //当前高度
+    prev: Hasher,        //上一个区块id
 }
 
-impl<'a> BlkHelper<'a> {
+impl BlkHelper {
+    /// 设置区块难度属性 (bits,height,prev)
+    pub fn set_attr(&mut self, attr: (u32, u32, Hasher)) -> Result<&mut Self, Error> {
+        self.bits = attr.0;
+        self.height = attr.1;
+        self.prev = attr.2;
+        Ok(self)
+    }
+    /// 设置版本
+    pub fn set_ver(&mut self, ver: u16) -> Result<&mut Self, Error> {
+        self.ver = ver;
+        Ok(self)
+    }
     /// 设置交易费
     pub fn set_cbstr(&mut self, cbstr: &str) -> Result<&mut Self, Error> {
         self.cbstr = cbstr.into();
@@ -79,38 +94,38 @@ impl<'a> BlkHelper<'a> {
         self.txs.push(tx.clone());
         Ok(self)
     }
-    pub fn new(ctx: &'a Chain) -> Self {
+    pub fn new(ver: u16) -> Self {
         BlkHelper {
+            ver: ver,
             outs: vec![],
-            ctx: ctx,
             cbstr: "".into(),
+            bits: 0,
+            height: 0,
+            prev: Hasher::zero(),
             txs: vec![],
         }
     }
 }
 
 //创建下个区块
-impl<'a> TryFrom<&BlkHelper<'a>> for Block {
+impl TryFrom<&BlkHelper> for Block {
     type Error = Error;
-    fn try_from(helper: &BlkHelper<'a>) -> Result<Self, Self::Error> {
-        let conf = helper.ctx.config()?;
-        //下个难度和高度,当前id
-        let (bits, height, prev) = helper.ctx.next()?;
+    fn try_from(helper: &BlkHelper) -> Result<Self, Self::Error> {
         //初始化区块头
         let mut blk = Block::default();
-        blk.header.bits = bits;
+        blk.header.bits = helper.bits;
         blk.header.nonce = util::rand_u32();
         blk.header.set_now_time();
-        blk.header.set_ver(conf.ver);
-        blk.header.prev = prev;
-        blk.hhv = height;
+        blk.header.set_ver(helper.ver);
+        blk.header.prev = helper.prev.clone();
+        blk.hhv = helper.height;
         let mut cb = Tx::default();
-        cb.ver = conf.ver as u32;
+        cb.ver = helper.ver as u32;
         //coinbase交易输入
         let mut inv = TxIn::default();
         inv.out = Hasher::zero();
         inv.idx = 0;
-        inv.script = Script::new_script_cb(height, helper.cbstr.as_bytes())?;
+        inv.script = Script::new_script_cb(helper.height, helper.cbstr.as_bytes())?;
         inv.seq = 0;
         cb.ins.push(inv);
         //coinbase输出
@@ -131,7 +146,7 @@ impl<'a> TryFrom<&BlkHelper<'a>> for Block {
         for tx in helper.txs.iter() {
             size += tx.get_size();
             if size > consts::MAX_BLOCK_SIZE {
-                return Error::msg("block size > MAX_BLOCK_SIZE");
+                break;
             }
             blk.txs.push((**tx).clone());
         }
@@ -301,15 +316,16 @@ pub struct TxPoolIter<'a> {
     pool: &'a TxPool,
     rev: Rev<btree_map::Iter<'a, i64, Vec<Arc<Tx>>>>,
     iter: Option<slice::Iter<'a, Arc<Tx>>>,
+    fee: i64,
 }
 
 impl<'a> Iterator for TxPoolIter<'a> {
-    type Item = Arc<Tx>;
+    type Item = (i64, Arc<Tx>);
     fn next(&mut self) -> Option<Self::Item> {
         match self.iter {
             Some(ref mut iter) => match iter.next() {
                 Some(next) => {
-                    return Some(next.clone());
+                    return Some((self.fee, next.clone()));
                 }
                 None => {
                     self.iter = None;
@@ -319,6 +335,7 @@ impl<'a> Iterator for TxPoolIter<'a> {
             None => match self.rev.next() {
                 Some(v) => {
                     self.iter = Some(v.1.iter());
+                    self.fee = *v.0;
                     return self.next();
                 }
                 None => {
@@ -331,11 +348,12 @@ impl<'a> Iterator for TxPoolIter<'a> {
 
 impl TxPool {
     /// 交易池按交易费从大到小获取
-    pub fn iter<'a>(&'a mut self) -> TxPoolIter<'a> {
+    pub fn iter<'a>(&'a self) -> TxPoolIter<'a> {
         TxPoolIter {
             pool: self,
             rev: self.byfee.iter().rev(),
             iter: None,
+            fee: 0,
         }
     }
     /// 检测交易是否可进行交易池
@@ -981,6 +999,10 @@ impl BlkIndexer {
     fn remove(&mut self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.pool.remove(id)
     }
+    /// 获取交易池
+    fn get_txpool(&self) -> &TxPool {
+        &self.pool
+    }
     /// 获取当前配置
     fn config(&self) -> &Config {
         &self.conf
@@ -1531,13 +1553,11 @@ impl Chain {
     pub fn new_tx_helper<'a>(&'a self) -> TxHelper<'a> {
         TxHelper::new(self)
     }
-    /// 创建区块助手
-    pub fn new_blk_helper<'a>(&'a self) -> BlkHelper<'a> {
-        BlkHelper::new(self)
-    }
     /// 从当前链顶创建一个新区块只包含coinbase交易
     pub fn new_block(&self, cbstr: &str, addr: &str) -> Result<Block, Error> {
-        let mut helper = self.new_blk_helper();
+        let conf = self.config()?;
+        let mut helper = BlkHelper::new(conf.ver);
+        helper.set_attr(self.next()?)?;
         helper.set_cbstr(cbstr)?;
         helper.add_out(addr, self.compute_reward(0)?)?;
         let mut blk = Block::try_from(&helper)?;
@@ -1627,6 +1647,32 @@ impl Chain {
     /// 从交易池移除交易
     pub fn remove(&self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.do_write(|v| v.remove(id))
+    }
+    /// 从交易池获取交易创建区块
+    pub fn create_block<F>(&self, cbstr: &str, f: F) -> Result<Block, Error>
+    where
+        F: FnOnce(i64, &mut BlkHelper) -> Result<(), Error>,
+    {
+        self.do_write(|v| {
+            let mut helper = BlkHelper::new(v.conf.ver);
+            helper.set_attr(v.next()?)?;
+            helper.set_cbstr(cbstr)?;
+            let blk = Block::try_from(&helper)?;
+            let mut bsiz = blk.get_size();
+            //coinbase可输出交易额
+            let mut cbfee = v.compute_reward(blk.hhv)?;
+            for (fee, tx) in v.get_txpool().iter() {
+                bsiz += tx.get_size();
+                if bsiz > consts::MAX_BLOCK_SIZE {
+                    break;
+                }
+                //交易费
+                cbfee += fee;
+                helper.add_tx(tx.clone())?;
+            }
+            f(cbfee, &mut helper)?;
+            Block::try_from(&helper)
+        })
     }
 }
 
@@ -1795,9 +1841,32 @@ fn test_tx_helper() {
 
         let tx = Tx::try_from(&txh)?;
         //新交易放入交易池
-        let id = idx.append(&tx)?;
-        //从交易池拉取交易列表
-        println!("{:x?}", tx);
+        idx.append(&tx)?;
+
+        let mut blk = idx.create_block("testblock", |fee, helper| {
+            //奖励和交易费放入acc
+            helper.add_out(&acc.string()?, fee)?;
+            Ok(())
+        })?;
+        idx.compute_block_bits(&mut blk)?;
+        idx.link(&blk)?;
+
+        //转入acc2的20COIN
+        let coins = idx.coins(&acc2)?;
+        assert_eq!(1, coins.len());
+        assert_eq!(20 * consts::COIN, coins[0].value);
+
+        //转入acc1的10COIN
+        let coins = idx.coins(&acc1)?;
+        assert_eq!(1, coins.len());
+        assert_eq!(10 * consts::COIN, coins[0].value);
+
+        //acc剩余和新区块奖励+交易费
+        let coins = idx.coins(&acc)?;
+        assert_eq!(101, coins.len());
+        for c in coins {
+            println!("{} {} {}", c.height, c.value, c.flags);
+        }
         Ok(())
     });
 }
