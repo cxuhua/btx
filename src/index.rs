@@ -319,6 +319,13 @@ pub struct TxPoolIter<'a> {
     fee: i64,
 }
 
+impl TxPoolIter<'_> {
+    /// 获取交易池数量
+    pub fn count(&self) -> usize {
+        self.pool.len()
+    }
+}
+
 impl<'a> Iterator for TxPoolIter<'a> {
     type Item = (i64, Arc<Tx>);
     fn next(&mut self) -> Option<Self::Item> {
@@ -981,6 +988,10 @@ impl BlkIndexer {
             acp: None,
         })
     }
+    /// 创建交易池迭代器
+    fn get_txp_iter(&self) -> TxPoolIter {
+        self.pool.iter()
+    }
     /// 添加交易到交易池
     fn append(&mut self, tx: &Tx) -> Result<Hasher, Error> {
         //检测基本值
@@ -998,10 +1009,6 @@ impl BlkIndexer {
     /// 从交易池移除交易
     fn remove(&mut self, id: &Hasher) -> Result<Arc<Tx>, Error> {
         self.pool.remove(id)
-    }
-    /// 获取交易池
-    fn get_txpool(&self) -> &TxPool {
-        &self.pool
     }
     /// 获取当前配置
     fn config(&self) -> &Config {
@@ -1249,7 +1256,7 @@ impl BlkIndexer {
         Ok((tfee, cfee))
     }
     /// 计算区块工作难度
-    fn compute_block_bits(&self, blk: &mut Block) -> Result<(), Error> {
+    fn compute_pow(&self, blk: &mut Block) -> Result<(), Error> {
         let mut id = blk.id()?;
         let mut count = 0;
         //验证工作难度
@@ -1481,8 +1488,8 @@ impl BlkIndexer {
             if inv.is_coinbase() {
                 continue;
             }
-            //获取引用的金额
-            let coin = self.get_txin_ref_coin(&inv)?;
+            //获取引用的金额,这里是消费金额,必须存在
+            let coin = self.get_coin(&inv.get_address()?, &inv.out, inv.idx)?;
             //在当前高度上是否成熟
             if !coin.is_valid(best.height) {
                 return Error::msg("ref coin not valid");
@@ -1538,8 +1545,8 @@ impl Chain {
         self.do_read(|v| v.compute_reward(h))
     }
     /// 计算区块工作难度
-    pub fn compute_block_bits(&self, blk: &mut Block) -> Result<(), Error> {
-        self.do_read(|v| v.compute_block_bits(blk))
+    pub fn compute_pow(&self, blk: &mut Block) -> Result<(), Error> {
+        self.do_read(|v| v.compute_pow(blk))
     }
     /// 设置第一个区块,只有空链才能设置
     pub fn set_genesis_id(&self, id: &Hasher) -> Result<(), Error> {
@@ -1561,7 +1568,7 @@ impl Chain {
         helper.set_cbstr(cbstr)?;
         helper.add_out(addr, self.compute_reward(0)?)?;
         let mut blk = Block::try_from(&helper)?;
-        self.compute_block_bits(&mut blk)?;
+        self.compute_pow(&mut blk)?;
         Ok(blk)
     }
     /// lock read process
@@ -1661,7 +1668,7 @@ impl Chain {
             let mut bsiz = blk.get_size();
             //coinbase可输出交易额
             let mut cbfee = v.compute_reward(blk.hhv)?;
-            for (fee, tx) in v.get_txpool().iter() {
+            for (fee, tx) in v.get_txp_iter() {
                 bsiz += tx.get_size();
                 if bsiz > consts::MAX_BLOCK_SIZE {
                     break;
@@ -1842,13 +1849,14 @@ fn test_tx_helper() {
         let tx = Tx::try_from(&txh)?;
         //新交易放入交易池
         idx.append(&tx)?;
-
+        //从交易池获取交易创建区块
         let mut blk = idx.create_block("testblock", |fee, helper| {
             //奖励和交易费放入acc
             helper.add_out(&acc.string()?, fee)?;
             Ok(())
         })?;
-        idx.compute_block_bits(&mut blk)?;
+        //计算pow
+        idx.compute_pow(&mut blk)?;
         idx.link(&blk)?;
 
         //转入acc2的20COIN
@@ -1864,9 +1872,9 @@ fn test_tx_helper() {
         //acc剩余和新区块奖励+交易费
         let coins = idx.coins(&acc)?;
         assert_eq!(101, coins.len());
-        for c in coins {
-            println!("{} {} {}", c.height, c.value, c.flags);
-        }
+        idx.pop()?;
+        let coins = idx.coins(&acc)?;
+        assert_eq!(101, coins.len());
         Ok(())
     });
 }
