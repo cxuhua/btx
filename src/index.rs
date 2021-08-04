@@ -452,7 +452,7 @@ impl TxPool {
         false
     }
     /// 获取账户输出金额
-    /// 来自交易池的金额是不能直接消费的
+    /// 来自交易池的金额是不能直接消费的被标记为 COIN_ATTR_FLAGS_TXPOOL
     pub fn coins(&self, acc: &Account) -> Result<Vec<CoinAttr>, Error> {
         let addr = acc.get_address()?;
         let mut coins = vec![];
@@ -994,6 +994,11 @@ impl BlkIndexer {
     }
     /// 添加交易到交易池
     fn append(&mut self, tx: &Tx) -> Result<Hasher, Error> {
+        let id = tx.id()?;
+        //每个交易id应该是不会重复的
+        if self.leveldb.has(&id.as_ref().into()) {
+            return Error::msg("tx exists chain");
+        }
         //检测基本值
         tx.check_value(self)?;
         let best = self.best()?;
@@ -1001,7 +1006,7 @@ impl BlkIndexer {
         self.check_tx_sign(tx)?;
         //检测下个高度下金额是否正确
         self.check_tx_amount(best.next(), &tx)?;
-        let id = tx.id()?;
+        //获取交易费,根据交易排序存储
         let fee = self.get_tx_transaction_fee(tx)?;
         self.pool.push(tx, fee)?;
         Ok(id)
@@ -1557,13 +1562,17 @@ impl Chain {
         self.do_read(|v| v.get_account_pool())
     }
     /// 创建交易助手
-    pub fn new_tx_helper<'a>(&'a self) -> TxHelper<'a> {
+    pub fn new_tx_helper(&self) -> TxHelper {
         TxHelper::new(self)
+    }
+    /// 创建区块助手
+    pub fn new_blk_helper(&self) -> Result<BlkHelper, Error> {
+        let conf = self.config()?;
+        Ok(BlkHelper::new(conf.ver))
     }
     /// 从当前链顶创建一个新区块只包含coinbase交易
     pub fn new_block(&self, cbstr: &str, addr: &str) -> Result<Block, Error> {
-        let conf = self.config()?;
-        let mut helper = BlkHelper::new(conf.ver);
+        let mut helper = self.new_blk_helper()?;
         helper.set_attr(self.next()?)?;
         helper.set_cbstr(cbstr)?;
         helper.add_out(addr, self.compute_reward(0)?)?;
@@ -1661,7 +1670,7 @@ impl Chain {
         F: FnOnce(i64, &mut BlkHelper) -> Result<(), Error>,
     {
         self.do_write(|v| {
-            let mut helper = BlkHelper::new(v.conf.ver);
+            let mut helper = self.new_blk_helper()?;
             helper.set_attr(v.next()?)?;
             helper.set_cbstr(cbstr)?;
             let blk = Block::try_from(&helper)?;
@@ -1872,9 +1881,12 @@ fn test_tx_helper() {
         //acc剩余和新区块奖励+交易费
         let coins = idx.coins(&acc)?;
         assert_eq!(101, coins.len());
+        //回退3个区块
+        idx.pop()?;
+        idx.pop()?;
         idx.pop()?;
         let coins = idx.coins(&acc)?;
-        assert_eq!(101, coins.len());
+        assert_eq!(99, coins.len());
         Ok(())
     });
 }

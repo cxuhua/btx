@@ -13,6 +13,7 @@ pub mod index;
 pub mod iobuf;
 pub mod leveldb;
 pub mod merkle;
+pub mod pubsub;
 pub mod script;
 pub mod store;
 pub mod util;
