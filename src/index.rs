@@ -22,8 +22,9 @@ use std::convert::{Into, TryFrom, TryInto};
 use std::iter::Rev;
 use std::path::Path;
 use std::slice;
-use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::{Arc, Mutex};
+use threadpool::ThreadPool;
 
 /// 交易助手输出元素
 #[derive(Debug, Clone)]
@@ -784,6 +785,19 @@ fn test_block_index_coin_save() {
     });
 }
 
+/// 链事件通知
+/// 在链环境中执行
+pub trait ChainListener: Sync + Send {
+    /// 当成功连接一个区块时
+    fn on_link_block(&self, ctx: &Chain, blk: &Block) -> Result<(), Error>;
+    /// 当移除一个区时
+    fn on_pop_block(&self, ctx: &Chain, blk: &Block) -> Result<(), Error>;
+    /// 当添加一个交易时
+    fn on_append_tx(&self, ctx: &Chain, tx: &Tx) -> Result<(), Error>;
+    /// 当移除交易
+    fn on_remove_tx(&self, ctx: &Chain, tx: &Tx) -> Result<(), Error>;
+}
+
 /// 区块链数据存储索引
 pub struct BlkIndexer {
     cache: BlkCache,                   //缓存
@@ -935,6 +949,10 @@ impl<'a> ExectorEnv for LinkExectorEnv<'a> {
         self.singer.verify_tx(self.cache, self.inv, self.outv, &acc)
     }
 }
+
+///标记为安全,通过Chain调用
+unsafe impl Send for BlkIndexer {}
+unsafe impl Sync for BlkIndexer {}
 
 /// 数据文件分布说明
 /// data  --- 数据根目录
@@ -1413,7 +1431,6 @@ impl BlkIndexer {
             //无条件移除
             let _ = self.pool.remove(&txid);
         }
-        //发送成功连接区块通知!!!
         Ok(next)
     }
     /// 获取交易信息
@@ -1517,7 +1534,7 @@ impl BlkIndexer {
     }
     /// 回退一个区块,回退多个连续调用此方法
     /// 返回被回退的区块
-    fn pop(&mut self) -> Result<Block, Error> {
+    fn pop(&mut self) -> Result<Arc<Block>, Error> {
         //获取区块链最高区块属性
         let best = self.best()?;
         if best.id == self.conf.genesis {
@@ -1528,6 +1545,7 @@ impl BlkIndexer {
         //读取区块数据
         let buf = self.blk.pull(&attr.blk)?;
         let blk: Block = Reader::unpack(&buf)?;
+        let blk = Arc::new(blk);
         //读取回退数据
         let buf = self.rev.pull(&attr.rev)?;
         let mut batch: IBatch = buf[..].try_into()?;
@@ -1537,14 +1555,22 @@ impl BlkIndexer {
         self.cache.pop(idkey);
         //批量写入
         self.leveldb.write(&batch, true)?;
-        Ok(blk)
+        Ok(blk.clone())
     }
 }
 
 /// 链线程安全封装
-pub struct Chain(RwLock<BlkIndexer>);
+pub struct Chain {
+    idx: RwLock<BlkIndexer>,
+    event: Option<Box<dyn ChainListener>>,
+    tpool: Mutex<ThreadPool>,
+}
 
 impl Chain {
+    /// 设置监听器
+    pub fn set_listener(&mut self, l: Box<dyn ChainListener>) {
+        self.event = Some(l);
+    }
     /// 计算某高度下的奖励
     pub fn compute_reward(&self, h: u32) -> Result<i64, Error> {
         self.do_read(|v| v.compute_reward(h))
@@ -1565,50 +1591,64 @@ impl Chain {
     pub fn new_tx_helper(&self) -> TxHelper {
         TxHelper::new(self)
     }
-    /// 创建区块助手
-    pub fn new_blk_helper(&self) -> Result<BlkHelper, Error> {
-        let conf = self.config()?;
-        Ok(BlkHelper::new(conf.ver))
-    }
     /// 从当前链顶创建一个新区块只包含coinbase交易
     pub fn new_block(&self, cbstr: &str, addr: &str) -> Result<Block, Error> {
-        let mut helper = self.new_blk_helper()?;
-        helper.set_attr(self.next()?)?;
-        helper.set_cbstr(cbstr)?;
-        helper.add_out(addr, self.compute_reward(0)?)?;
-        let mut blk = Block::try_from(&helper)?;
-        self.compute_pow(&mut blk)?;
-        Ok(blk)
+        self.do_write(|idx| {
+            let mut helper = BlkHelper::new(idx.conf.ver);
+            helper.set_attr(idx.next()?)?;
+            helper.set_cbstr(cbstr)?;
+            helper.add_out(addr, idx.compute_reward(0)?)?;
+            let mut blk = Block::try_from(&helper)?;
+            idx.compute_pow(&mut blk)?;
+            Ok(blk)
+        })
+    }
+    /// 创建并链接一个区块
+    pub fn new_link_block(&self, cbstr: &str, addr: &str) -> Result<Block, Error> {
+        self.do_write(|idx| {
+            let mut helper = BlkHelper::new(idx.conf.ver);
+            helper.set_attr(idx.next()?)?;
+            helper.set_cbstr(cbstr)?;
+            helper.add_out(addr, idx.compute_reward(0)?)?;
+            let mut blk = Block::try_from(&helper)?;
+            idx.compute_pow(&mut blk)?;
+            idx.link(&blk)?;
+            Ok(blk)
+        })
     }
     /// lock read process
     fn do_read<R, F>(&self, f: F) -> Result<R, Error>
     where
         F: FnOnce(&BlkIndexer) -> Result<R, Error>,
     {
-        self.0.read().map_or_else(Error::std, |ref v| f(v))
+        self.idx.read().map_or_else(Error::std, |ref v| f(v))
     }
     /// lock write process
     fn do_write<R, F>(&self, f: F) -> Result<R, Error>
     where
         F: FnOnce(&mut BlkIndexer) -> Result<R, Error>,
     {
-        self.0.write().map_or_else(Error::std, |ref mut v| f(v))
+        self.idx.write().map_or_else(Error::std, |ref mut v| f(v))
     }
     /// 获取当前配置
     pub fn config(&self) -> Result<Config, Error> {
         self.do_read(|v| Ok(v.config().clone()))
     }
     /// 创建指定路径存储的链
-    pub fn new(conf: &Config, acp: Arc<dyn AccountPool>) -> Result<Self, Error> {
-        let chain = Chain(RwLock::new(BlkIndexer::new(conf)?));
+    pub fn new(conf: &Config, acp: Arc<dyn AccountPool>) -> Result<Arc<Self>, Error> {
+        let chain = Chain {
+            idx: RwLock::new(BlkIndexer::new(conf)?),
+            event: None,
+            tpool: Mutex::new(ThreadPool::new(conf.pbnum)),
+        };
         chain.do_write(|v| v.set_account_pool(acp))?;
-        Ok(chain)
+        Ok(Arc::new(chain))
     }
     /// 获取区块链顶部信息
     pub fn best(&self) -> Result<Best, Error> {
         self.do_read(|v| v.best())
     }
-    /// 结算下个难度
+    /// 计算下个难度,高度,和使用的上个id
     pub fn next(&self) -> Result<(u32, u32, Hasher), Error> {
         self.do_write(|v| v.next())
     }
@@ -1650,34 +1690,51 @@ impl Chain {
     }
     /// 链接一个新区块到链上
     pub fn link(&self, blk: &Block) -> Result<Best, Error> {
-        self.do_write(|ctx| ctx.link(blk))
+        let best = self.do_write(|ctx| ctx.link(blk))?;
+        if let Some(e) = &self.event {
+            e.on_link_block(self, blk)?;
+        }
+        Ok(best)
     }
     /// 弹出一个区块
-    pub fn pop(&self) -> Result<Block, Error> {
-        self.do_write(|v| v.pop())
+    pub fn pop(&self) -> Result<Arc<Block>, Error> {
+        let blk = self.do_write(|v| v.pop())?;
+        if let Some(e) = &self.event {
+            e.on_pop_block(self, &*blk)?;
+        }
+        Ok(blk)
     }
     /// 添加交易到交易池
     pub fn append(&self, tx: &Tx) -> Result<Hasher, Error> {
-        self.do_write(|v| v.append(tx))
+        let id = self.do_write(|v| v.append(tx))?;
+        if let Some(e) = &self.event {
+            e.on_append_tx(self, tx)?;
+        }
+        Ok(id)
     }
     /// 从交易池移除交易
     pub fn remove(&self, id: &Hasher) -> Result<Arc<Tx>, Error> {
-        self.do_write(|v| v.remove(id))
+        let tx = self.do_write(|v| v.remove(id))?;
+        if let Some(e) = &self.event {
+            e.on_remove_tx(self, &*tx)?;
+        }
+        Ok(tx)
     }
     /// 从交易池获取交易创建区块
     pub fn create_block<F>(&self, cbstr: &str, f: F) -> Result<Block, Error>
     where
         F: FnOnce(i64, &mut BlkHelper) -> Result<(), Error>,
     {
-        self.do_write(|v| {
-            let mut helper = self.new_blk_helper()?;
-            helper.set_attr(v.next()?)?;
+        self.do_write(|idx| {
+            let conf = &idx.conf;
+            let mut helper = BlkHelper::new(conf.ver);
+            helper.set_attr(idx.next()?)?;
             helper.set_cbstr(cbstr)?;
             let blk = Block::try_from(&helper)?;
             let mut bsiz = blk.get_size();
             //coinbase可输出交易额
-            let mut cbfee = v.compute_reward(blk.hhv)?;
-            for (fee, tx) in v.get_txp_iter() {
+            let mut cbfee = idx.compute_reward(blk.hhv)?;
+            for (fee, tx) in idx.get_txp_iter() {
                 bsiz += tx.get_size();
                 if bsiz > consts::MAX_BLOCK_SIZE {
                     break;
@@ -1693,29 +1750,6 @@ impl Chain {
 }
 
 #[test]
-fn test_indexer_thread() {
-    use std::sync::Arc;
-    use std::{thread, time};
-    Config::test(|_, idx| {
-        let indexer = Arc::new(idx);
-        for _ in 0..10 {
-            let idx = indexer.clone();
-            let accpool = idx.get_account_pool().unwrap();
-            thread::spawn(move || {
-                let acc = accpool.value(0).unwrap();
-                let b1 = idx.new_block("", &acc.string().unwrap()).unwrap();
-                idx.link(&b1).unwrap();
-                let id = b1.id().unwrap();
-                let b2 = idx.get(&id.as_ref().into()).unwrap();
-                assert_eq!(b1, *b2);
-            });
-        }
-        thread::sleep(time::Duration::from_secs(1));
-        Ok(())
-    })
-}
-
-#[test]
 fn test_simple_link_pop() {
     Config::test(|conf, idx| {
         let accpool = idx.get_account_pool()?;
@@ -1723,8 +1757,7 @@ fn test_simple_link_pop() {
         let best = idx.best()?;
         assert_eq!(0, best.height);
         for _ in 0u32..=10 {
-            let b1 = idx.new_block("", &acc.string()?)?;
-            idx.link(&b1)?;
+            idx.new_link_block("", &acc.string()?)?;
         }
         let best = idx.best()?;
         assert_eq!(11, best.height);
@@ -1827,8 +1860,7 @@ fn test_tx_helper() {
         let acc = accpool.value(2)?;
         //创建100个区块
         for _ in 0..consts::COINBASE_MATURITY {
-            let b = idx.new_block("", &acc.string()?)?;
-            idx.link(&b)?;
+            idx.new_link_block("", &acc.string()?)?;
         }
         let best = idx.best()?;
         assert_eq!(best.height, 100);
@@ -1889,4 +1921,26 @@ fn test_tx_helper() {
         assert_eq!(99, coins.len());
         Ok(())
     });
+}
+
+#[test]
+fn test_indexer_thread() {
+    use std::sync::Arc;
+    use std::{thread, time};
+    Config::test(|_, idx| {
+        let indexer = Arc::new(idx);
+        for _ in 0..10 {
+            let idx = indexer.clone();
+            let accpool = idx.get_account_pool().unwrap();
+            thread::spawn(move || {
+                let acc = accpool.value(0).unwrap();
+                let b1 = idx.new_link_block("", &acc.string().unwrap()).unwrap();
+                let id = b1.id().unwrap();
+                let b2 = idx.get(&id.as_ref().into()).unwrap();
+                assert_eq!(b1, *b2);
+            });
+        }
+        thread::sleep(time::Duration::from_secs(1));
+        Ok(())
+    })
 }

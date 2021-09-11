@@ -19,9 +19,11 @@ impl Debug for Subscription {
 }
 
 impl Subscription {
+    pub fn id(&self) -> &str {
+        &self.channel_id
+    }
     pub fn cancel(self) { /* self is dropped */
     }
-
     pub fn notify_others(&self, msg: &DataEle) {
         self.pubsub
             .notify_exception(&self.channel_id, msg, Some(self.id));
@@ -50,31 +52,31 @@ impl SubActivator {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum DataEle {
-    Block(Block),
-    Tx(Tx),
+    Block(Arc<Block>),
+    Tx(Arc<Tx>),
 }
 
 impl From<&Block> for DataEle {
     fn from(v: &Block) -> Self {
-        Self::Block(v.clone())
+        Self::Block(Arc::new(v.clone()))
     }
 }
 
 impl From<Block> for DataEle {
     fn from(v: Block) -> Self {
-        Self::Block(v)
+        Self::Block(Arc::new(v))
     }
 }
 
 impl From<&Tx> for DataEle {
     fn from(v: &Tx) -> Self {
-        Self::Tx(v.clone())
+        Self::Tx(Arc::new(v.clone()))
     }
 }
 
 impl From<Tx> for DataEle {
     fn from(v: Tx) -> Self {
-        Self::Tx(v)
+        Self::Tx(Arc::new(v))
     }
 }
 
@@ -138,6 +140,15 @@ impl Drop for RAIIBoolGuard {
 }
 
 impl PubSub {
+    pub fn new_with_pool(tpool: Rc<ThreadPool>) -> PubSub {
+        PubSub {
+            inner: Arc::new(Mutex::new(InnerPubSub {
+                channels: HashMap::new(),
+                next_id: 0,
+                thread_pool: tpool,
+            })),
+        }
+    }
     pub fn new(num_threads: usize) -> PubSub {
         PubSub {
             inner: Arc::new(Mutex::new(InnerPubSub {
@@ -153,7 +164,7 @@ impl PubSub {
     {
         let mut data = self.inner.lock().unwrap();
         if !data.channels.contains_key(channel) {
-            data.channels.insert(channel.to_string(), HashMap::new());
+            data.channels.insert(channel.into(), HashMap::new());
         }
         let id = data.next_id;
         data.next_id += 1;
@@ -167,7 +178,7 @@ impl PubSub {
         subscriptions.insert(id, sub_data);
         Subscription {
             pubsub: self.clone(),
-            channel_id: channel.to_string(),
+            channel_id: channel.into(),
             id: id,
         }
     }
@@ -324,13 +335,13 @@ fn lazy_subscribe() {
     let tx = Arc::new(Tx::default());
 
     let sub1_activator = pubsub.lazy_subscribe("channel1");
-    pubsub.notify("channel1", &DataEle::Tx((*tx).clone()));
+    pubsub.notify("channel1", &DataEle::Tx(tx.clone()));
 
     let count1 = count.clone();
 
     let tx = tx.clone();
     let sub1 = sub1_activator.activate(move |msg| {
-        assert_eq!(msg, DataEle::Tx((*tx).clone()));
+        assert_eq!(msg, DataEle::Tx(tx.clone()));
         *count1.lock().unwrap() += 1;
     });
     sleep(Duration::from_millis(500));

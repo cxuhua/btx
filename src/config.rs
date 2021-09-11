@@ -4,6 +4,7 @@ use crate::errors::Error;
 use crate::hasher::Hasher;
 use crate::index::Chain;
 use std::convert::TryInto;
+use std::sync::Arc;
 use tempdir::TempDir;
 
 #[derive(Clone, Debug)]
@@ -22,6 +23,8 @@ pub struct Config {
     pub halving: u32, //210000
     /// 区块版本
     pub ver: u16,
+    ///发布订阅线程数量
+    pub pbnum: usize,
 }
 
 impl Config {
@@ -29,7 +32,7 @@ impl Config {
     /// tf在这个配置上创建链测试方法
     pub fn test<F>(tf: F)
     where
-        F: FnOnce(&Config, Chain) -> Result<(), Error>,
+        F: FnOnce(&Config, Arc<Chain>) -> Result<(), Error>,
     {
         let tmp = TempDir::new("btx").unwrap();
         let dir = tmp.path().to_str().unwrap();
@@ -38,18 +41,22 @@ impl Config {
         //2号账户用来存放区块奖励
         let acc = accpool.value(2).unwrap();
         let addr = acc.string().unwrap();
-        let conf = &Config {
-            ver: 1,
-            dir: dir.into(),
-            pow_limit: "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-                .try_into()
-                .unwrap(),
-            genesis: Hasher::zero(),
-            pow_time: 14 * 24 * 60 * 60,
-            pow_span: 2016,
-            halving: 210000,
-        };
-        let idx = Chain::new(conf, accpool).unwrap();
+        let idx = Chain::new(
+            &Config {
+                ver: 1,
+                dir: dir.into(),
+                pow_limit: "00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                    .try_into()
+                    .unwrap(),
+                genesis: Hasher::zero(),
+                pow_time: 14 * 24 * 60 * 60,
+                pow_span: 2016,
+                halving: 210000,
+                pbnum: 4,
+            },
+            accpool,
+        )
+        .unwrap();
         //创建第一个区块
         let blk = idx.new_block("genesis block", &addr).unwrap();
         //设置为首个区块
@@ -60,8 +67,11 @@ impl Config {
         tf(&idx.config().unwrap(), idx).unwrap();
     }
     /// 发布配置
-    pub fn release() -> Self {
-        Config {
+    pub fn release<F>(tf: F) -> Result<(), Error>
+    where
+        F: FnOnce(Arc<Chain>) -> Result<(), Error>,
+    {
+        let conf = Config {
             ver: 1,
             dir: "/blkdir".into(),
             pow_limit: "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
@@ -73,7 +83,11 @@ impl Config {
             pow_time: 14 * 24 * 60 * 60,
             pow_span: 2016,
             halving: 210000,
-        }
+            pbnum: 4,
+        };
+        //暂时用测试的
+        let accpool = AccTestPool::new();
+        tf(Chain::new(&conf, accpool)?)
     }
 }
 
