@@ -10,16 +10,18 @@ edition = "2018"
 name = "btx"
 crate-type = ["staticlib"]
 path = "src/lib.rs"
+proc-macro = true
 
 
 [dependencies]
+futures = "0.3.17"
 threadpool = "1.8.1"
 leveldb = "0.8.6"
 env_logger = "0.8.4"
 bech32 = "0.8.1"
 sha2 = "0.9.8"
 hex = "0.4.3"
-bytes = "1.0.1"
+bytes = "1.1.0"
 tempdir = "0.3.7"
 rsa = "0.4.1"
 rand = "0.8.4"
@@ -32,6 +34,6 @@ config = "0.11.0"
 lru = "0.6.6"
 db-key = "0.0.5"
 lazy_static = "1.4.0"
-# redis = { version = "0.21.0", features = ["tokio-comp"] }
-# tokio = { version = "1.9.0", features = ["full"] }
-# hyper = { version = "0.14", features = ["full"] }
+redis = { version = "0.21.2", features = ["tokio-comp"] }
+tokio = { version = "1.11.0", features = ["full"] }
+reqwest = "0.11.4"
